@@ -30,13 +30,13 @@ export default function AdminHolidays() {
   // =============================
   // TOGGLE FERIADO
   // =============================
-  const handleToggleDay = async (date) => {
-    if (!date) return;
-
-    if (holidays.includes(date)) {
-      await removeHoliday(year, date);
+  const handleToggleDay = async (iso) => {
+    if (holidays.includes(iso)) {
+      // Si ya está en la lista → quitar
+      await removeHoliday(year, iso);
     } else {
-      await addHoliday(year, date);
+      // Si no está → agregar
+      await addHoliday(year, iso);
     }
   };
 
@@ -47,9 +47,7 @@ export default function AdminHolidays() {
     <div className="space-y-3">
       {/* Selector de año */}
       <div className="flex items-center justify-between">
-        <label className="text-xs text-gray-600 font-medium">
-          Año
-        </label>
+        <label className="text-xs text-gray-600 font-medium">Año</label>
 
         <select
           value={year}
@@ -84,7 +82,7 @@ export default function AdminHolidays() {
       {/* Leyenda */}
       <div className="flex items-center gap-4 text-[11px] text-gray-600">
         <div className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 bg-red-200 rounded" />
+          <span className="inline-block w-3 h-3 bg-pink-200 rounded" />
           Feriado
         </div>
 
@@ -92,16 +90,15 @@ export default function AdminHolidays() {
           <span className="inline-block w-3 h-3 border border-gray-300 rounded" />
           Día normal
         </div>
-      
 
         <div className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 border bg-gray-200 border-gray-300 rounded" />
+          <span className="inline-block w-3 h-3 bg-gray-200 border border-gray-300 rounded" />
           Fin de semana
         </div>
       </div>
 
       <p className="text-[11px] text-gray-500">
-        Tocá un día para marcarlo o desmarcarlo como feriado.
+        Click en un día para marcarlo o quitarlo como feriado.
       </p>
     </div>
   );

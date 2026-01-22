@@ -4,189 +4,213 @@ import { addHours } from "../services/hoursService";
 import MonthCalendarPicker from "../components/layout/ui/MonthCalendarPicker";
 import { getProjects } from "../services/projectsService";
 import { getJiraIssues } from "../services/jiraService";
-import { getAdminSettings } from "../services/adminSettingsService";
+import {
+  getAdminSettings,
+  listenAdminSettings,
+} from "../services/adminSettingsService";
+import { getActiveTaskTypes } from "../services/taskTypesService";
 import { listenHolidays } from "../services/holidaysService";
-
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from "../services/firebase";
+import MessageBanner from "../components/ui/MessageBanner";
+import { getActiveWorkItems } from "../services/workItemsService";
+import TaskTypeSelector from "../components/Shared/TaskTypeSelector.jsx";
+import WorkItemSelector from "../components/Shared/WorkItemComboTest.jsx";
 
 /* =============================
-   HOOK – HORAS DEL USUARIO (TIEMPO REAL)
+   HOOK – HORAS DEL USUARIO
 ============================= */
 function useHorasUsuarioTiempoReal(userId) {
   const [records, setRecords] = useState([]);
 
   useEffect(() => {
     if (!userId) return;
-
     const q = query(
       collection(db, "hours"),
       where("userId", "==", userId)
     );
-
     const unsub = onSnapshot(q, (snap) => {
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setRecords(data);
+      setRecords(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
-
     return () => unsub();
   }, [userId]);
 
   return records;
 }
 
+
 export default function AddHours() {
-  const { user } = useAuth();
+  const { user, settings } = useAuth();
 
   const [projects, setProjects] = useState([]);
+  const [taskTypes, setTaskTypes] = useState([]);
   const [jiraIssues, setJiraIssues] = useState([]);
-  const [loadingJira, setLoadingJira] = useState(false);
+  const [workItems, setWorkItems] = useState([]);
 
-  const [settings, setSettings] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
-
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
-
-  const [holidays, setHolidays] = useState([]);
+  const [errors, setErrors] = useState({});
   const [calendarMessage, setCalendarMessage] = useState("");
 
   const hoy = new Date().toISOString().slice(0, 10);
   const year = hoy.slice(0, 4);
 
-  // =============================
-  // HORAS EN TIEMPO REAL
-  // =============================
   const records = useHorasUsuarioTiempoReal(user?.uid);
 
   const { dayTotals, markedDays } = useMemo(() => {
     const totals = {};
     records.forEach((r) => {
-      if (!r.date) return;
-      totals[r.date] = (totals[r.date] || 0) + Number(r.hours || 0);
+      if (!r.date || r.deleted) return;
+      const h = Number(r.hours || 0);
+      if (h > 0) totals[r.date] = (totals[r.date] || 0) + h;
     });
-    return {
-      dayTotals: totals,
-      markedDays: Object.keys(totals),
-    };
+    return { dayTotals: totals, markedDays: Object.keys(totals) };
   }, [records]);
 
-  // =============================
-  // FORM STATE
-  // =============================
   const [form, setForm] = useState({
     project: "",
+    taskId: "",
+    taskTypeId: "",
+    workItemId: "",
+    workItemTitle: "",
     hours: "",
     description: "",
     jiraIssue: "",
-    date: "",
   });
 
   const [multiple, setMultiple] = useState(false);
-  const [range, setRange] = useState({ from: "", to: "" });
+  const [selectedDays, setSelectedDays] = useState([]);
+  const [holidays, setHolidays] = useState([]);
 
-  // =============================
-  // INIT
-  // =============================
+  /* =============================
+     INIT
+  ============================= */
   useEffect(() => {
-    getAdminSettings().then((d) => {
-      setSettings(d);
+    async function load() {
+      const [adminSettings, projects, types, wis] = await Promise.all([
+        getAdminSettings(),
+        getProjects(),
+        getActiveTaskTypes(),
+        getActiveWorkItems(),
+      ]);
+
+      setProjects(projects);
+      setTaskTypes(types);
+      setWorkItems(wis);
       setLoadingSettings(false);
-    });
-    getProjects().then(setProjects);
+    }
+    load();
   }, []);
 
   useEffect(() => {
-    if (!user || !settings?.featureJiraCombo) return;
-
-    async function loadJira() {
-      setLoadingJira(true);
-      const data = await getJiraIssues();
-      setJiraIssues(data);
-      setLoadingJira(false);
+    if (settings?.featureJiraCombo) {
+      getJiraIssues().then(setJiraIssues);
     }
+  }, [settings?.featureJiraCombo]);
 
-    loadJira();
-  }, [user, settings]);
+  useEffect(() => {
+  console.log("WORK ITEMS LOADED:", workItems);
+}, [workItems]);
 
   useEffect(() => {
     const unsub = listenHolidays(year, setHolidays);
     return () => unsub?.();
   }, [year]);
 
-  // =============================
-  // HANDLERS
-  // =============================
-  const handleChange = (e) =>
-    setForm({ ...form, [e.target.name]: e.target.value });
+  /* =============================
+     SETTINGS – REALTIME
+  ============================= */
+  useEffect(() => {
+    const unsub = listenAdminSettings(() => {
+      setLoadingSettings(false);
+    });
+    return () => unsub();
+  }, []);
 
-  const showCalendarMessage = (text) => {
-    setCalendarMessage(text);
-    setTimeout(() => setCalendarMessage(""), 2500);
+  /* =============================
+     REACTIVIDAD FEATURES
+  ============================= */
+  useEffect(() => {
+    if (!settings?.featureWorkItems) {
+      setForm((prev) => ({
+        ...prev,
+        workItemId: "",
+        workItemTitle: "",
+      }));
+    }
+  }, [settings?.featureWorkItems]);
+
+  useEffect(() => {
+    if (!settings?.featureTaskCombo) {
+      setForm((prev) => ({
+        ...prev,
+        taskId: "",
+        taskTypeId: "",
+      }));
+    }
+  }, [settings?.featureTaskCombo]);
+
+  useEffect(() => {
+    if (!settings?.featureJiraCombo) {
+      setForm((prev) => ({ ...prev, jiraIssue: "" }));
+    }
+  }, [settings?.featureJiraCombo]);
+
+  useEffect(() => {
+    if (!settings?.featureProjectCombo) {
+      setForm((prev) => ({ ...prev, project: "" }));
+    }
+  }, [settings?.featureProjectCombo]);
+
+  /* =============================
+     HANDLERS
+  ============================= */
+  const handleChange = (e) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+    setErrors((p) => ({ ...p, [e.target.name]: null }));
   };
 
-  const handleSelectDate = (date) => {
-    if (date > hoy) return;
-    if (holidays.includes(date)) {
-      showCalendarMessage("No podés cargar horas en un día feriado");
+  const handleToggleDay = (iso) => {
+    if (holidays.includes(iso)) {
+      setCalendarMessage("No podés cargar horas en un día feriado");
       return;
     }
-    setForm((p) => ({ ...p, date }));
-  };
+    if (iso > hoy) return;
 
-  const isWeekend = (d) => {
-    const day = new Date(d).getDay();
-    return day === 0 || day === 6;
-  };
-
-  const getDatesInRange = (from, to) => {
-    const dates = [];
-    let current = new Date(from);
-    const end = new Date(to);
-
-    while (current <= end) {
-      const d = current.toISOString().slice(0, 10);
-      if (d <= hoy && !holidays.includes(d) && !isWeekend(d)) {
-        dates.push(d);
-      }
-      current.setDate(current.getDate() + 1);
-    }
-    return dates;
+    setSelectedDays((prev) =>
+      multiple
+        ? prev.includes(iso)
+          ? prev.filter((d) => d !== iso)
+          : [...prev, iso]
+        : prev.includes(iso)
+        ? []
+        : [iso]
+    );
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!form.project || Number(form.hours) <= 0) {
-      alert("Completar proyecto y horas válidas");
+    const newErrors = {};
+    if (settings?.featureProjectCombo && !form.project)
+      newErrors.project = "Seleccioná un proyecto";
+    if (!form.hours || Number(form.hours) <= 0)
+      newErrors.hours = "Ingresá horas válidas";
+    if (selectedDays.length === 0)
+      setCalendarMessage("Seleccioná al menos un día");
+
+    if (Object.keys(newErrors).length) {
+      setErrors(newErrors);
       return;
     }
 
     try {
       setSaving(true);
-
-      if (multiple) {
-        const days = getDatesInRange(range.from, range.to);
-        if (days.length === 0) {
-          alert("El rango no contiene días hábiles");
-          return;
-        }
-
-        for (const day of days) {
-          await addHours(user.uid, {
-            ...form,
-            date: day,
-            hours: Number(form.hours),
-          });
-        }
-      } else {
-        if (!form.date) {
-          alert("Seleccionar una fecha");
-          return;
-        }
-
+      for (const day of selectedDays) {
         await addHours(user.uid, {
           ...form,
+          date: day,
           hours: Number(form.hours),
         });
       }
@@ -194,150 +218,203 @@ export default function AddHours() {
       setSuccess(true);
       setForm({
         project: "",
+        taskId: "",
+        taskTypeId: "",
+        workItemId: "",
+        workItemTitle: "",
         hours: "",
         description: "",
         jiraIssue: "",
-        date: "",
       });
+      setSelectedDays([]);
       setMultiple(false);
-      setRange({ from: "", to: "" });
-
-      setTimeout(() => setSuccess(false), 2000);
     } finally {
       setSaving(false);
     }
   };
 
   if (loadingSettings) {
-    return <p className="p-4 text-gray-500">Cargando configuración…</p>;
+    return <p className="text-trackly-muted">Cargando configuración…</p>;
   }
 
-  // =============================
-  // RENDER
-  // =============================
   return (
-    <div className="py-4 mx-auto max-w-7xl px-2 space-y-4">
-      <h1 className="text-2xl font-semibold">Cargar horas</h1>
-
+    <div className="trackly-container space-y-6">
       {success && (
-        <div className="bg-green-100 text-green-700 px-3 py-2 rounded text-sm">
-          ✔ Horas guardadas correctamente
-        </div>
+        <MessageBanner
+          type="success"
+          duration={2500}
+          onClose={() => setSuccess(false)}
+        >
+          Horas guardadas correctamente
+        </MessageBanner>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_320px] gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_360px] gap-6 items-start">
         {/* FORM */}
-        <div className="bg-white rounded shadow p-4">
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <select
-              name="project"
-              value={form.project}
-              onChange={handleChange}
-              className="input w-full"
-              required
-            >
-              <option value="">Seleccionar proyecto</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.name}>{p.name}</option>
-              ))}
-            </select>
-
-            {settings?.featureJiraCombo && (
-              <select
-                name="jiraIssue"
-                value={form.jiraIssue}
-                onChange={handleChange}
-                className="input w-full"
-              >
-                <option value="">— Sin tarea Jira —</option>
-                {jiraIssues.map((i) => (
-                  <option key={i.key} value={i.key}>
-                    {i.key} — {i.summary}
-                  </option>
-                ))}
-              </select>
+        <div className="trackly-card p-6">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {settings?.featureProjectCombo && (
+              <Field label="Proyecto" error={errors.project}>
+                <select
+                  name="project"
+                  value={form.project}
+                  onChange={handleChange}
+                  className="trackly-input"
+                >
+                  <option value="">Seleccionar proyectosssS</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             )}
 
-            <input
-              type="number"
-              name="hours"
-              value={form.hours}
-              onChange={handleChange}
-              className="input w-full"
-              step="0.25"
-              min="0.25"
-              required
-            />
+            {settings?.featureWorkItems && (
+              <Field label="Tarea (Work Item)">
+                <WorkItemSelector
+                  workItems={workItems}
+                  value={form.workItemId}
+                  onChange={(wi) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      workItemId: wi?.id || "",
+                      workItemTitle: wi?.title || "",
+                    }))
+                  }
+                />
+              </Field>
+            )}
 
-            <textarea
-              name="description"
-              value={form.description}
-              onChange={handleChange}
-              className="input w-full"
-              rows="3"
-            />
+            {settings?.featureTaskCombo && (
+              <TaskTypeSelector
+                taskId={form.taskId}
+                taskTypeId={form.taskTypeId}
+                onChange={({ taskId, taskTypeId }) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    taskId,
+                    taskTypeId,
+                  }))
+                }
+              />
+            )}
 
-            <button className="btn-primary w-full" disabled={saving}>
+              {settings?.featureJiraCombo && (
+            <Field label="Tarea (Work Item)">
+                <WorkItemComboTest
+                  workItems={workItems}
+                  value={form.workItemId}
+                  onChange={(wi) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      workItemId: wi?.id || "",
+                      workItemTitle: wi?.title || "",
+                    }))
+                  }
+                />
+              </Field>
+             )}            
+          
+
+            {settings?.featureJiraCombo && (
+              <Field label="Tarea Jira (opcional)">
+                <select
+                  name="jiraIssue"
+                  value={form.jiraIssue}
+                  onChange={handleChange}
+                  className="trackly-input"
+                >
+                  <option value="">— Sin Jira —</option>
+                  {jiraIssues.map((i) => (
+                    <option key={i.key} value={i.key}>
+                      {i.key} — {i.summary}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
+            <Field label="Horas" error={errors.hours}>
+              <input
+                type="number"
+                name="hours"
+                value={form.hours}
+                onChange={handleChange}
+                step="0.25"
+                min="0.25"
+                className="trackly-input"
+              />
+            </Field>
+
+            <Field label="Descripción (opcional)">
+              <textarea
+                name="description"
+                value={form.description}
+                onChange={handleChange}
+                rows="3"
+                className="trackly-input"
+              />
+            </Field>
+
+            <button
+              className="trackly-btn trackly-btn-primary w-full"
+              disabled={saving}
+            >
               {saving ? "Guardando…" : "Guardar horas"}
             </button>
           </form>
         </div>
 
-        {/* PANEL CALENDARIO */}
-        <div className="bg-white rounded shadow p-3 space-y-3">
-          {/* CALENDARIO */}
+        {/* CALENDARIO */}
+        <div className="trackly-card p-4 space-y-3 relative">
           <MonthCalendarPicker
-            selected={form.date}
-            onSelect={handleSelectDate}
+            selected={selectedDays[0] || null}
+            selectedDays={selectedDays}
+            multiple={multiple}
+            onSelect={handleToggleDay}
             holidays={holidays}
             maxDate={hoy}
-            editable={false}
+            editable
             dayTotals={dayTotals}
             markedDays={markedDays}
+            showLegend
           />
 
           {calendarMessage && (
-            <div className="text-xs bg-pink-100 text-pink-700 rounded px-2 py-1">
+            <MessageBanner
+              type="warning"
+              duration={2500}
+              onClose={() => setCalendarMessage("")}
+            >
               {calendarMessage}
-            </div>
+            </MessageBanner>
           )}
 
-          {/* REGISTRO MÚLTIPLE — INTEGRADO AL CALENDARIO */}
-          <div className="border-t pt-3 space-y-2 text-xs">
-            <label className="flex items-center gap-2 font-medium">
-              <input
-                type="checkbox"
-                checked={multiple}
-                onChange={(e) => setMultiple(e.target.checked)}
-              />
-              Registrar múltiples días
-            </label>
-
-            {multiple && (
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="date"
-                  max={hoy}
-                  value={range.from}
-                  onChange={(e) =>
-                    setRange({ ...range, from: e.target.value })
-                  }
-                  className="input"
-                />
-                <input
-                  type="date"
-                  max={hoy}
-                  value={range.to}
-                  onChange={(e) =>
-                    setRange({ ...range, to: e.target.value })
-                  }
-                  className="input"
-                />
-              </div>
-            )}
-          </div>
+          <label className="flex items-center gap-2 text-sm pt-2">
+            <input
+              type="checkbox"
+              checked={multiple}
+              onChange={(e) => setMultiple(e.target.checked)}
+            />
+            Registrar múltiples días
+          </label>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* =============================
+   FIELD
+============================= */
+function Field({ label, error, children }) {
+  return (
+    <div className="space-y-1">
+      <label className="trackly-label">{label}</label>
+      {children}
+      {error && <p className="text-xs text-trackly-danger">{error}</p>}
     </div>
   );
 }

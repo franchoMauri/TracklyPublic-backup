@@ -8,43 +8,44 @@ import {
   serverTimestamp,
   doc,
   updateDoc,
-  deleteDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../services/firebase.js";
 
 const hoursRef = collection(db, "hours");
 
-// ======================================================
-// ➕ AGREGAR HORAS + RESET INACTIVIDAD
-// ======================================================
-export const addHours = async (userId, data) => {
-  console.log("GUARDANDO HORAS:", userId, data);
+/* ======================================================
+   ➕ CREAR REGISTRO (USER / ADMIN) — NUEVO ESTÁNDAR
+   ====================================================== */
+export const createHourRecord = async (data) => {
+  return addDoc(hoursRef, {
+    ...data,
+    deleted: false,
+    createdAt: serverTimestamp(),
+  });
+};
 
-  // 1️⃣ Guardar registro de horas
-  const hourDoc = await addDoc(hoursRef, {
+/* ======================================================
+   ➕ ALIAS LEGACY (NO ROMPE AddHours.jsx)
+   ====================================================== */
+export const addHours = async (userId, data) => {
+  return createHourRecord({
     userId,
     project: data.project,
     hours: Number(data.hours),
-    date: data.date, // YYYY-MM-DD
+    date: data.date,
     description: data.description || "",
     jiraIssue: data.jiraIssue || null,
-    createdAt: serverTimestamp(),
+
+    createdBy: userId,
+    createdByRole: "user",
+    actionType: "created",
   });
-
-  // 2️⃣ Actualizar estado del usuario (actividad)
-  const userRef = doc(db, "users", userId);
-
-  await updateDoc(userRef, {
-    lastHourAt: serverTimestamp(),
-    inactivityNotifiedAt: null, // 🔄 reset anti-spam
-  });
-
-  return hourDoc;
 };
 
-// ======================================================
-// 📥 HORAS DE UN USUARIO
-// ======================================================
+/* ======================================================
+   📥 HORAS DE UN USUARIO (INCLUYE ELIMINADOS)
+   ====================================================== */
 export const getUserHours = async (userId) => {
   const q = query(
     hoursRef,
@@ -54,75 +55,59 @@ export const getUserHours = async (userId) => {
 
   const snapshot = await getDocs(q);
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
+  return snapshot.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
   }));
 };
 
-export const getAllHours = async () => {
-  const snapshot = await getDocs(collection(db, "hours"));
+/* ======================================================
+   ✏️ EDITAR REGISTRO
+   ====================================================== */
+export const updateHourRecord = async (id, data) => {
+  if (!id) throw new Error("ID de registro inválido");
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
-};
-
-// ======================================================
-// 📅 DÍAS CON HORAS — MES ACTUAL
-// ======================================================
-export const getCurrentMonthDaysWithHours = async (userId) => {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth() + 1;
-
-  const records = await getUserHours(userId);
-  const uniqueDays = new Set();
-
-  records.forEach((r) => {
-    if (!r.date) return;
-
-    const [y, m] = r.date.split("-");
-
-    if (Number(y) === year && Number(m) === month && Number(r.hours) > 0) {
-      uniqueDays.add(r.date);
-    }
+  const ref = doc(db, "hours", id);
+  await updateDoc(ref, {
+    ...data,
+    updatedAt: serverTimestamp(),
   });
-
-  return uniqueDays.size;
 };
 
-// ======================================================
-// 📊 HORAS DEL MES CORRIENTE
-// ======================================================
-export const getCurrentMonthHours = async (userId) => {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
+/* ======================================================
+   🗑 SOFT DELETE (USER / ADMIN)
+   ====================================================== */
+export const softDeleteHourRecord = async (id, meta = {}) => {
+  if (!id) throw new Error("ID de registro inválido");
 
-  const start = `${year}-${month}-01`;
-  const end = `${year}-${month}-31`;
+  const ref = doc(db, "hours", id);
 
-  const q = query(
-    hoursRef,
-    where("userId", "==", userId),
-    where("date", ">=", start),
-    where("date", "<=", end),
-    orderBy("date", "asc")
-  );
-
-  const snapshot = await getDocs(q);
-
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+  await updateDoc(ref, {
+    deleted: true,
+    actionType: "deleted",
+    deletedAt: serverTimestamp(),
+    ...meta, // deletedBy, deletedByRole
+  });
 };
 
-// ======================================================
-// 📆 HORAS POR MES (YYYY-MM)
-// ======================================================
+/* ======================================================
+   ♻️ RESTAURAR REGISTRO
+   ====================================================== */
+export const restoreHourRecord = async (id) => {
+  if (!id) throw new Error("ID de registro inválido");
+
+  const ref = doc(db, "hours", id);
+
+  await updateDoc(ref, {
+    deleted: false,
+    actionType: "restored",
+    restoredAt: serverTimestamp(),
+  });
+};
+
+/* ======================================================
+   📆 HORAS POR MES
+   ====================================================== */
 export const getHoursByMonth = async (userId, month) => {
   const start = `${month}-01`;
   const end = `${month}-31`;
@@ -137,53 +122,33 @@ export const getHoursByMonth = async (userId, month) => {
 
   const snapshot = await getDocs(q);
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
+  return snapshot.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
   }));
 };
 
-// ======================================================
-// ✏️ EDITAR REGISTRO
-// ======================================================
-export const updateHourRecord = async (id, data) => {
-  if (!id) throw new Error("ID de registro inválido");
-
-  const ref = doc(db, "hours", id);
-  await updateDoc(ref, data);
-};
-
-// ======================================================
-// 🗓 DÍAS CON HORAS POR MES (CALENDARIO)
-// ======================================================
-export const getDaysWithHoursByMonth = async (userId, month) => {
-  const start = `${month}-01`;
-  const end = `${month}-31`;
+/* ======================================================
+   🔴 LISTENER EN TIEMPO REAL – HORAS DE USUARIO
+   ====================================================== */
+  export const listenUserHours = (userId, callback) => {
+  if (!userId) return () => {};
 
   const q = query(
-    hoursRef,
+    collection(db, "hours"),
     where("userId", "==", userId),
-    where("date", ">=", start),
-    where("date", "<=", end)
+    orderBy("createdAt", "desc")
   );
 
-  const snapshot = await getDocs(q);
-  const days = new Set();
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    const data = snapshot.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
 
-  snapshot.docs.forEach((doc) => {
-    const data = doc.data();
-    if (data.date) days.add(data.date);
+    callback(data);
   });
 
-  return Array.from(days);
+  return unsubscribe;
 };
 
-// ======================================================
-// 🗑 BORRAR REGISTRO
-// ======================================================
-export const deleteHourRecord = async (id) => {
-  if (!id) throw new Error("ID de registro inválido");
-
-  const ref = doc(db, "hours", id);
-  await deleteDoc(ref);
-};

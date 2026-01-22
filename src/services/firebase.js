@@ -1,10 +1,10 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 
 // ⚙️ Configuración Firebase
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyAGOAndrOy2JbtJjzw4yQJKtBpI0jNA2yU",
   authDomain: "trakly-99bfa.firebaseapp.com",
   projectId: "trakly-99bfa",
@@ -13,21 +13,32 @@ const firebaseConfig = {
   appId: "1:100243710666:web:2c2c810ddebca460ad4a33",
 };
 
-// 🚀 Inicializar Firebase (UNA SOLA VEZ)
-export const app = initializeApp(firebaseConfig);
+// =============================
+// APP PRINCIPAL (SESSION ACTIVA)
+// =============================
+const app = !getApps().length
+  ? initializeApp(firebaseConfig)
+  : getApp();
 
 console.log("🔥 Firebase inicializado", app.name);
 
-// 🔐 Auth
+// 🔐 Auth principal (admin / usuario logueado)
 export const auth = getAuth(app);
 
 // 🗄️ Firestore
 export const db = getFirestore(app);
 
-// ☁️ Functions (NECESARIO para Jira)
+// ☁️ Functions
 export const functions = getFunctions(app);
 
-// 🆕 Messaging (solo si el browser lo soporta)
-//export const messaging = await isSupported()
-//  ? getMessaging(app)
-//  : null;
+// =============================
+// APP SECUNDARIA (CREAR USUARIOS)
+// =============================
+const secondaryApp = getApps().find(
+  (a) => a.name === "secondary"
+)
+  ? getApp("secondary")
+  : initializeApp(firebaseConfig, "secondary");
+
+// 🔐 Auth secundario (NO afecta sesión principal)
+export const secondaryAuth = getAuth(secondaryApp);

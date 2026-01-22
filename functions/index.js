@@ -2,8 +2,16 @@ const admin = require("firebase-admin");
 admin.initializeApp();
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onRequest } = require("firebase-functions/v2/https");
+const { onRequest, onCall } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const nodemailer = require("nodemailer");
+
+// ======================================================
+// 🔐 SECRETS — JIRA
+// ======================================================
+const JIRA_BASE_URL = defineSecret("JIRA_BASE_URL");
+const JIRA_EMAIL = defineSecret("JIRA_EMAIL");
+const JIRA_API_TOKEN = defineSecret("JIRA_API_TOKEN");
 
 // ======================================================
 // ⏱️ CRON — Detectar usuarios inactivos
@@ -56,7 +64,7 @@ exports.checkUserInactivity = onSchedule(
         await admin.messaging().send({
           token: user.fcmToken,
           notification: {
-            title: "⏰ Trackly",
+            title: "Trackly",
             body: `Hace ${hoursInactive} horas que no registrás horas`,
           },
         });
@@ -78,7 +86,6 @@ exports.checkUserInactivity = onSchedule(
 exports.sendHoursReport = onRequest(
   { region: "us-central1" },
   async (req, res) => {
-    
     try {
       const { userId, month } = req.body;
 
@@ -87,20 +94,11 @@ exports.sendHoursReport = onRequest(
       }
 
       if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS) {
-        console.error("❌ Gmail env vars missing");
+        console.error("Gmail env vars missing");
         return res.status(500).send("Mail not configured");
       }
 
       const db = admin.firestore();
-
-      const subject = `Informe horas Trackly — ${month}`;
-      const html = `
-          <div style="font-family:Arial,sans-serif;text-align:center">
-            <img src="https://i.imgur.com/9Y7QZ4A.png" width="120" />
-            <h2>Horas informadas</h2>
-            <p><strong>Total de horas:</strong> ${totalHours}</p>
-          </div>
-        `;
 
       const userSnap = await db
         .collection("users")
@@ -123,20 +121,25 @@ exports.sendHoursReport = onRequest(
         .filter((r) => r.date?.startsWith(month))
         .reduce((sum, r) => sum + Number(r.hours || 0), 0);
 
+      const subject = `Informe horas Trackly — ${month}`;
+      const html = `
+        <div style="font-family:Arial,sans-serif;text-align:center">
+          <h2>Horas informadas</h2>
+          <p><strong>Total de horas:</strong> ${totalHours}</p>
+        </div>
+      `;
+
       const transporter = nodemailer.createTransport({
         service: "gmail",
         port: 465,
         secure: true,
-        logger: true,
-        debug: true,
-        secureConnection: false,
         auth: {
           user: process.env.GMAIL_USER,
           pass: process.env.GMAIL_PASS,
         },
-        tls:{
-          rejectUnauthorized: false
-        }
+        tls: {
+          rejectUnauthorized: false,
+        },
       });
 
       await transporter.sendMail({
@@ -148,8 +151,81 @@ exports.sendHoursReport = onRequest(
 
       res.send("OK");
     } catch (err) {
-      console.error("❌ Error sendHoursReport", err);
+      console.error("Error sendHoursReport", err);
       res.status(500).send("Error");
     }
   }
 );
+
+// ===================================================================
+// 🧩 JIRA — OBTENER ISSUES (httpsCallable)
+// ===================================================================
+// ===================================================================
+// 🧩 JIRA — OBTENER ISSUES (httpsCallable) ✔️ FIX
+// ===================================================================
+exports.getJiraIssues = onCall(
+  { region: "us-central1" },
+  async (request) => {
+    const { auth } = request;
+
+    if (!auth) {
+      throw new Error("User not authenticated");
+    }
+
+    const {
+      JIRA_BASE_URL,
+      JIRA_EMAIL,
+      JIRA_API_TOKEN,
+    } = process.env;
+
+    if (!JIRA_BASE_URL || !JIRA_EMAIL || !JIRA_API_TOKEN) {
+      console.error("❌ JIRA ENV VARS MISSING");
+      return [];
+    }
+
+    try {
+      const authHeader = Buffer.from(
+        `${JIRA_EMAIL}:${JIRA_API_TOKEN}`
+      ).toString("base64");
+
+      // ✅ JQL MÁS ROBUSTO
+      const jql = "ORDER BY updated DESC";
+
+      const url =
+        `${JIRA_BASE_URL}/rest/api/3/search` +
+        `?jql=${encodeURIComponent(jql)}` +
+        `&fields=summary` +
+        `&maxResults=50`;
+
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Basic ${authHeader}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("❌ JIRA HTTP ERROR", res.status, text);
+        return [];
+      }
+
+      const json = await res.json();
+
+      if (!Array.isArray(json.issues)) {
+        console.warn("⚠️ Jira response without issues array");
+        return [];
+      }
+
+      return json.issues.map((i) => ({
+        id: i.id,
+        key: i.key,
+        summary: i.fields?.summary || "Sin título",
+      }));
+    } catch (err) {
+      console.error("❌ JIRA FETCH ERROR:", err.message);
+      return [];
+    }
+  }
+);
+

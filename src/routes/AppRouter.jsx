@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+
 import Layout from "../components/layout/Layout";
-import AuthGate from "../components/AuthGate";
 import Admin from "../pages/Admin";
 import Dashboard from "../pages/Dashboard";
 import AddHours from "../pages/AddHours";
@@ -11,25 +12,23 @@ import ChooseName from "../pages/ChooseName";
 import Profile from "../pages/Profile";
 
 import { useAuth } from "../context/AuthContext";
-import { useEffect, useState } from "react";
 import { listenAdminSettings } from "../services/adminSettingsService";
 
-function PrivateRoute({ children }) {
-  const { user, loading, needsOnboarding, profileLoaded } = useAuth();
-
-  if (loading || !profileLoaded) return null;
-  if (!user) return <Navigate to="/login" replace />;
-  if (needsOnboarding) return <Navigate to="/choose-name" replace />;
-
-  return children;
-}
-
 export default function AppRouter() {
-  const { user, role, loading, needsOnboarding, profileLoaded } = useAuth();
+  const {
+    user,
+    role,
+    loading,
+    needsOnboarding,
+    profileLoaded,
+  } = useAuth();
 
   const [settings, setSettings] = useState(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
+  // =============================
+  // ADMIN SETTINGS (solo si hay user)
+  // =============================
   useEffect(() => {
     if (!user) {
       setSettings(null);
@@ -45,6 +44,9 @@ export default function AppRouter() {
     return () => unsub?.();
   }, [user]);
 
+  // =============================
+  // BLOQUEO GLOBAL HASTA ESTADO ESTABLE
+  // =============================
   if (loading || (user && !profileLoaded) || (user && !settingsLoaded)) {
     return <div>Cargando…</div>;
   }
@@ -52,87 +54,125 @@ export default function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* ===== ROOT SIEMPRE DEFINIDA ===== */}
+
+        {/* ================= ROOT ================= */}
         <Route
           path="/"
           element={
-            user ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />
+            !user ? (
+              <Navigate to="/login" replace />
+            ) : needsOnboarding ? (
+              <Navigate to="/choose-name" replace />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
           }
         />
 
-        {/* ===== LOGIN ===== */}
-        <Route path="/login" element={<Login />} />
+        {/* ================= LOGIN ================= */}
+        <Route
+          path="/login"
+          element={
+            !user ? (
+              <Login />
+            ) : needsOnboarding ? (
+              <Navigate to="/choose-name" replace />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          }
+        />
 
-        {/* ===== ONBOARDING ===== */}
-        {user && needsOnboarding && (
-          <Route path="/choose-name" element={<ChooseName />} />
-        )}
+        {/* ================= ONBOARDING ================= */}
+        <Route
+          path="/choose-name"
+          element={
+            user && needsOnboarding ? (
+              <ChooseName />
+            ) : !user ? (
+              <Navigate to="/login" replace />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          }
+        />
 
-        {/* ===== APP ===== */}
-        {user && !needsOnboarding && (
-          <Route element={<Layout />}>
+        {/* ================= APP ================= */}
+        <Route element={<Layout />}>
+          <Route
+            path="/dashboard"
+            element={
+              user && !needsOnboarding ? (
+                <Dashboard />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+
+          <Route
+            path="/add"
+            element={
+              user && !needsOnboarding ? (
+                <AddHours />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+
+          <Route
+            path="/records"
+            element={
+              user && !needsOnboarding ? (
+                <MyRecords />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+
+          <Route
+            path="/profile"
+            element={
+              user && !needsOnboarding ? (
+                <Profile />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+
+          {settings?.featureReports && (
             <Route
-              path="/dashboard"
+              path="/reports"
               element={
-                <PrivateRoute>
-                  <Dashboard />
-                </PrivateRoute>
+                user && !needsOnboarding ? (
+                  <Reports />
+                ) : (
+                  <Navigate to="/" replace />
+                )
               }
             />
+          )}
 
+          {role === "admin" && (
             <Route
-              path="/add"
+              path="/admin"
               element={
-                <PrivateRoute>
-                  <AddHours />
-                </PrivateRoute>
+                user && !needsOnboarding ? (
+                  <Admin />
+                ) : (
+                  <Navigate to="/" replace />
+                )
               }
             />
+          )}
+        </Route>
 
-            <Route
-              path="/records"
-              element={
-                <PrivateRoute>
-                  <MyRecords />
-                </PrivateRoute>
-              }
-            />
-
-            <Route
-              path="/profile"
-              element={
-                <PrivateRoute>
-                  <Profile />
-                </PrivateRoute>
-              }
-            />
-
-            {settings?.featureReports && (
-              <Route
-                path="/reports"
-                element={
-                  <PrivateRoute>
-                    <Reports />
-                  </PrivateRoute>
-                }
-              />
-            )}
-
-            {role === "admin" && (
-              <Route
-                path="/admin"
-                element={
-                  <PrivateRoute>
-                    <Admin />
-                  </PrivateRoute>
-                }
-              />
-            )}
-          </Route>
-        )}
-
-        {/* ===== FALLBACK GLOBAL ===== */}
+        {/* ================= FALLBACK ================= */}
         <Route path="*" element={<Navigate to="/" replace />} />
+
       </Routes>
     </BrowserRouter>
   );

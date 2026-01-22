@@ -1,0 +1,189 @@
+import {
+  doc,
+  setDoc,
+  getDocs,
+  collection,
+  serverTimestamp,
+  updateDoc,
+  query,
+  orderBy,
+  where,
+  onSnapshot,
+} from "firebase/firestore";
+import { db } from "./firebase";
+import { getHoursByMonth } from "./hoursService";
+
+// ======================================================
+// 🧾 ENVIAR / REENVIAR INFORME MENSUAL
+// ======================================================
+export async function submitMonthlyReport(user, month) {
+  if (!user?.uid || !user?.name || !month) {
+    throw new Error("Datos inválidos para generar el informe");
+  }
+
+  const reportId = `${user.name}_${month.replace("-", "_")}`;
+  const reportRef = doc(db, "reports", reportId);
+
+  const records = await getHoursByMonth(user.uid, month);
+
+  if (!records.length) {
+    throw new Error("No hay horas cargadas para este mes");
+  }
+
+  let totalHours = 0;
+  const breakdown = {};
+
+  records.forEach((r) => {
+    const h = Number(r.hours || 0);
+    if (!r.date || h <= 0) return;
+
+    totalHours += h;
+    breakdown[r.date] = (breakdown[r.date] || 0) + h;
+  });
+
+  const entries = records.map((r) => ({
+    date: r.date,
+    hours: Number(r.hours || 0),
+    description: r.description || "",
+  }));
+
+  const payload = {
+    userId: user.uid,
+    userName: user.name,
+    month,
+    totalHours,
+    breakdown,
+    entries,
+    status: "submitted",
+    submittedAt: serverTimestamp(),
+    adminNote: null,
+    reviewedAt: null,
+  };
+
+  await setDoc(reportRef, payload);
+
+  return reportId;
+}
+
+// ======================================================
+// 📄 INFORMES DE UN USUARIO (FETCH)
+// ======================================================
+export async function getUserReports(userId) {
+  if (!userId) return [];
+
+  const q = query(
+    collection(db, "reports"),
+    where("userId", "==", userId),
+    orderBy("month", "desc")
+  );
+
+  const snap = await getDocs(q);
+
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+  }));
+}
+
+// ======================================================
+// 🔴 INFORMES DE USUARIO — TIEMPO REAL
+// ======================================================
+export function listenUserReports(userId, callback) {
+  if (!userId) return () => {};
+
+  const q = query(
+    collection(db, "reports"),
+    where("userId", "==", userId)
+  );
+
+  const unsub = onSnapshot(q, (snap) => {
+    const data = snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
+    callback(data);
+  });
+
+  return unsub;
+}
+
+// ======================================================
+// 📥 BANDEJA ADMIN — TODOS LOS INFORMES
+// ======================================================
+export async function getAdminReports() {
+  const q = query(
+    collection(db, "reports"),
+    orderBy("month", "desc")
+  );
+
+  const snap = await getDocs(q);
+
+  return snap.docs.map((d) => {
+    const data = d.data();
+
+    const entriesByDate = {};
+    (data.entries || []).forEach((e) => {
+      if (!e.date) return;
+
+      if (!entriesByDate[e.date]) {
+        entriesByDate[e.date] = [];
+      }
+
+      entriesByDate[e.date].push({
+        hours: e.hours,
+        description: e.description,
+      });
+    });
+
+    return {
+      id: d.id,
+      ...data,
+      entriesByDate,
+    };
+  });
+}
+
+// ======================================================
+// 🔴 ADMIN — INFORMES EN TIEMPO REAL
+// ======================================================
+export function listenAdminReports(callback) {
+  const q = query(
+    collection(db, "reports"),
+    orderBy("month", "desc")
+  );
+
+  const unsub = onSnapshot(q, (snap) => {
+    const data = snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
+    callback(data);
+  });
+
+  return unsub;
+}
+
+// ======================================================
+// ✅ / ❌ ADMIN — ACTUALIZAR ESTADO
+// ======================================================
+export async function updateReportStatus(
+  reportId,
+  status,
+  adminNote = null
+) {
+  if (!reportId || !status) {
+    throw new Error("Parámetros inválidos");
+  }
+
+  if (!["approved", "rejected"].includes(status)) {
+    throw new Error("Estado inválido");
+  }
+
+  const ref = doc(db, "reports", reportId);
+
+  await updateDoc(ref, {
+    status,
+    adminNote,
+    reviewedAt: serverTimestamp(),
+  });
+}

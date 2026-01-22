@@ -2,182 +2,236 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import MonthCalendarPicker from "../components/layout/ui/MonthCalendarPicker";
 import {
-  getUserHours,
   updateHourRecord,
-  deleteHourRecord,
+  listenUserHours,
 } from "../services/hoursService";
 import { getProjects } from "../services/projectsService";
+import { getJiraIssues } from "../services/jiraService";
 import { listenHolidays } from "../services/holidaysService";
+import {
+  submitMonthlyReport,
+  listenUserReports,
+} from "../services/reportsService";
+import InlineToast from "../components/ui/InlineToast";
+import { doc, getDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../services/firebase";
+import { getTasks } from "../services/tasksService";
+import { getTaskTypes } from "../services/taskTypesService";
+import TaskTypeSelector from "../components/shared/TaskTypeSelector";
+import { listenAdminSettings } from "../services/adminSettingsService";
 
 export default function MyRecords() {
-  const { user } = useAuth();
+  const { user, settings } = useAuth();
 
   const [records, setRecords] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [taskTypes, setTaskTypes] = useState([]);
+  const [jiraIssues, setJiraIssues] = useState([]);
+  const [loadingJira, setLoadingJira] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // filtros
   const [projectFilter, setProjectFilter] = useState("");
   const [selectedDate, setSelectedDate] = useState(null);
+  const [showDeleted, setShowDeleted] = useState(false);
 
-  // modal edición
   const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // 📧 informe
-  const [sendingReport, setSendingReport] = useState(false);
-  const [reportMsg, setReportMsg] = useState("");
-
-  // 📅 feriados
   const [holidays, setHolidays] = useState([]);
-
-  // 📊 calendario
   const [dayTotals, setDayTotals] = useState({});
   const [markedDays, setMarkedDays] = useState([]);
 
-  // =============================
-  // CARGA INICIAL
-  // =============================
+  const [toast, setToast] = useState({ message: "", type: "success" });
+
+  const [currentMonthReport, setCurrentMonthReport] = useState(null);
+  const currentMonth = new Date().toISOString().slice(0, 7);
+
+  /* =============================
+     REALTIME HOURS
+  ============================= */
   useEffect(() => {
     if (!user) return;
 
-    async function loadData() {
-      const [hoursData, projectsData] = await Promise.all([
-        getUserHours(user.uid),
-        getProjects(),
-      ]);
-
-      setRecords(hoursData);
-      setProjects(projectsData);
+    const unsub = listenUserHours(user.uid, (data) => {
+      setRecords(data);
       setLoading(false);
-    }
+    });
 
-    loadData();
+    return () => unsub();
   }, [user]);
 
-  // =============================
-  // FERIADOS
-  // =============================
+  /* =============================
+     LIMPIAR TAREA / TIPO SI SE DESHABILITA
+  ============================= */
+  useEffect(() => {
+  if (
+    !settings?.featureTaskCombo &&
+    editing &&
+    (editing.taskId || editing.taskTypeId)
+  ) {
+    setEditing((prev) => ({
+      ...prev,
+      task: null,
+      taskType: null,
+      taskId: null,
+      taskTypeId: null,
+    }));
+  }
+}, [settings?.featureTaskCombo]); // 👈 sacamos editing de deps
+
+
+  /* =============================
+     REALTIME REPORTS
+  ============================= */
   useEffect(() => {
     if (!user) return;
+
+    const unsub = listenUserReports(user.uid, (reports) => {
+      const r = reports.find((x) => x.month === currentMonth);
+      setCurrentMonthReport(r || null);
+    });
+
+    return () => unsub();
+  }, [user, currentMonth]);
+
+  /* =============================
+     STATIC DATA
+  ============================= */
+  useEffect(() => {
+    getProjects().then(setProjects);
+    getTasks().then(setTasks);
+    getTaskTypes().then(setTaskTypes);
+    getJiraIssues().then(setJiraIssues);
+  }, []);
+
+  /* =============================
+     HOLIDAYS
+  ============================= */
+  useEffect(() => {
     const year = new Date().getFullYear().toString();
     const unsub = listenHolidays(year, setHolidays);
     return () => unsub?.();
-  }, [user]);
+  }, []);
 
-  // =============================
-  // TOTALES POR DÍA (CALENDARIO)
-  // =============================
+  /* =============================
+     CALENDAR SUMMARY
+  ============================= */
   useEffect(() => {
     const totals = {};
+
     records.forEach((r) => {
-      if (!r.date) return;
-      totals[r.date] = (totals[r.date] || 0) + Number(r.hours || 0);
+      if (!r.date || r.deleted) return;
+      const h = Number(r.hours || 0);
+      if (h <= 0) return;
+      totals[r.date] = (totals[r.date] || 0) + h;
+    });
+
+    Object.keys(totals).forEach((d) => {
+      if (totals[d] <= 0) delete totals[d];
     });
 
     setDayTotals(totals);
     setMarkedDays(Object.keys(totals));
   }, [records]);
 
-  // =============================
-  // FILTRO
-  // =============================
+  /* =============================
+     FILTERED RECORDS
+  ============================= */
   const filteredRecords = useMemo(() => {
-    return records.filter((r) => {
-      if (projectFilter && r.project !== projectFilter) return false;
-      if (selectedDate && r.date !== selectedDate) return false;
-      return true;
-    });
-  }, [records, projectFilter, selectedDate]);
+    return [...records]
+      .filter((r) => {
+        if (!showDeleted && r.deleted) return false;
+        if (projectFilter && r.project !== projectFilter) return false;
+        if (selectedDate && r.date !== selectedDate) return false;
+        return true;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [records, projectFilter, selectedDate, showDeleted]);
 
-  const totalHours = filteredRecords.reduce(
-    (sum, r) => sum + Number(r.hours || 0),
-    0
-  );
+  /* =============================
+     REPORT
+  ============================= */
+  const canSendReport =
+    !currentMonthReport ||
+    currentMonthReport.status !== "submitted";
 
-  // =============================
-  // 📧 ENVIAR INFORME
-  // =============================
   const handleSendReport = async () => {
-    try {
-      setSendingReport(true);
-      setReportMsg("");
+    const snap = await getDoc(doc(db, "users", user.uid));
+    await submitMonthlyReport(
+      { uid: user.uid, name: snap.data().name },
+      currentMonth
+    );
 
-      const month =
-        selectedDate?.slice(0, 7) ||
-        new Date().toISOString().slice(0, 7);
-
-      const res = await fetch(
-        `${import.meta.env.VITE_FUNCTIONS_URL}/sendHoursReport`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: user.uid,
-            month,
-          }),
-        }
-      );
-
-      if (!res.ok) throw new Error();
-
-      setReportMsg("📨 Informe enviado correctamente");
-    } catch {
-      setReportMsg("❌ Error enviando el informe");
-    } finally {
-      setSendingReport(false);
-      setTimeout(() => setReportMsg(""), 3000);
-    }
+    setToast({ message: "Informe enviado correctamente", type: "success" });
   };
 
-  // =============================
-  // EDITAR
-  // =============================
+  /* =============================
+     SAVE EDIT
+  ============================= */
   const handleSaveEdit = async () => {
     if (!editing) return;
+    setSaving(true);
 
     try {
-      setSaving(true);
-
-      await updateHourRecord(editing.id, {
-        project: editing.project,
+      const payload = {
+        project: editing.project || "",
+        jiraIssue: editing.jiraIssue || "",
         hours: Number(editing.hours),
         description: editing.description || "",
         date: editing.date,
+
+        modifiedBy: user.uid,
+        modifiedByRole: "user",
+        modifiedAt: serverTimestamp(),
+        actionType: "edited",
+
+        ...(settings?.featureTaskCombo
+          ? {
+              task: editing.task || "",
+              taskType: editing.taskType || "",
+              taskId: editing.taskId || null,
+              taskTypeId: editing.taskTypeId || null,
+            }
+          : {
+              task: null,
+              taskType: null,
+              taskId: null,
+              taskTypeId: null,
+            }),
+      };
+
+      await updateHourRecord(editing.id, payload);
+
+      setToast({
+        message: "Registro editado correctamente",
+        type: "success",
       });
 
-      setRecords((prev) =>
-        prev.map((r) => (r.id === editing.id ? editing : r))
-      );
-
       setEditing(null);
-    } catch (e) {
-      console.error(e);
-      alert("Error actualizando registro");
     } finally {
       setSaving(false);
     }
   };
 
-  // =============================
-  // ELIMINAR
-  // =============================
-  const handleDelete = async () => {
-    if (!editing) return;
-
-    const ok = confirm(
-      "¿Eliminar este registro? Esta acción no se puede deshacer."
-    );
-    if (!ok) return;
+  /* =============================
+     SOFT DELETE
+  ============================= */
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setSaving(true);
 
     try {
-      setSaving(true);
-      await deleteHourRecord(editing.id);
-      setRecords((prev) => prev.filter((r) => r.id !== editing.id));
-      setEditing(null);
-    } catch (e) {
-      console.error(e);
-      alert("Error eliminando registro");
+      await updateHourRecord(deleting.id, {
+        deleted: true,
+        deletedBy: user.uid,
+        deletedByRole: "user",
+        deletedAt: serverTimestamp(),
+        actionType: "deleted",
+      });
+
+      setDeleting(null);
     } finally {
       setSaving(false);
     }
@@ -187,108 +241,162 @@ export default function MyRecords() {
     return <p className="p-4 text-gray-500">Cargando registros...</p>;
   }
 
-  // =============================
-  // RENDER
-  // =============================
   return (
-    <div className="py-4 mx-auto max-w-7xl px-2 space-y-4">
-      <h1 className="text-2xl font-semibold">Mis registros</h1>
 
-      {/* 📧 BOTÓN INFORME */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={handleSendReport}
-          disabled={sendingReport}
-          className="btn-primary text-sm"
-        >
-          {sendingReport ? "Enviando…" : "Enviar informe por mail"}
-        </button>
+  <div className="py-4 mx-auto max-w-7xl px-2 space-y-4">
+    {/* HEADER */}
+    <InlineToast
+      message={toast.message}
+      type={toast.type}
+      onClose={() => setToast({ message: "", type: "success" })}
+    />
 
-        {reportMsg && (
-          <span className="text-sm text-gray-600">
-            {reportMsg}
-          </span>
-        )}
-      </div>
+    <div className="grid grid-cols-1 md:grid-cols-[1fr_320px] gap-2 items-start">
+      {/* LEFT */}
+      <div className="space-y-4">
+        {/* FILTERS */}
+        <div className="trackly-card p-4 flex gap-4 items-center">
+          <select
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            className="trackly-input min-w-[220px]"
+          >
+            <option value="">Todos los proyectos</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </select>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_320px] gap-2 items-start">
-        {/* ===== IZQUIERDA ===== */}
-        <div className="space-y-4">
-          {/* FILTROS */}
-          <div className="bg-white rounded-lg shadow p-4 flex flex-wrap gap-3 items-end">
-            <select
-              value={projectFilter}
-              onChange={(e) => setProjectFilter(e.target.value)}
-              className="input min-w-[200px]"
-            >
-              <option value="">Todos los proyectos</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-
-            {selectedDate && (
-              <button
-                onClick={() => setSelectedDate(null)}
-                className="text-sm text-indigo-600 hover:underline"
-              >
-                Limpiar día
-              </button>
-            )}
-          </div>
-
-          {/* TOTAL */}
-          <div className="bg-indigo-50 text-indigo-700 px-4 py-3 rounded-lg">
-            <strong>Total:</strong> {totalHours} horas
-          </div>
-
-          {/* TABLA */}
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left">Fecha</th>
-                  <th className="px-6 py-3 text-left">Proyecto</th>
-                  <th className="px-6 py-3 text-left">Horas</th>
-                  <th className="px-6 py-3 text-left">Descripción</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {filteredRecords.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan="4"
-                      className="px-6 py-8 text-center text-gray-500"
-                    >
-                      No hay registros
-                    </td>
-                  </tr>
-                )}
-
-                {filteredRecords.map((r) => (
-                  <tr
-                    key={r.id}
-                    className="border-t hover:bg-gray-50 cursor-pointer"
-                    onClick={() => setEditing({ ...r })}
-                  >
-                    <td className="px-6 py-3">{r.date}</td>
-                    <td className="px-6 py-3">{r.project}</td>
-                    <td className="px-6 py-3 font-medium">{r.hours}</td>
-                    <td className="px-6 py-3 text-gray-600">
-                      {r.description || "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <label className="flex items-center gap-2 text-sm text-trackly-muted">
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(e) => setShowDeleted(e.target.checked)}
+            />
+            Mostrar registros eliminados
+          </label>
         </div>
 
-        {/* ===== DERECHA – CALENDARIO ===== */}
-        <div className="bg-white rounded-lg shadow p-2 w-full">
+        {/* TABLE */}
+        <div className="trackly-card overflow-hidden">
+          <table className="trackly-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Proyecto</th>
+                <th>Horas</th>
+                <th>Descripción</th>
+                <th className="w-10" />
+              </tr>
+            </thead>
+
+            <tbody>
+              {filteredRecords.map((r) => {
+                const deletedByAdmin =
+                  r.deleted &&
+                  (r.deletedByRole === "admin" ||
+                    (r.modifiedByRole === "admin" &&
+                      r.actionType === "deleted"));
+
+                return (
+                  <tr
+                    key={r.id}
+                    className={
+                      r.deleted
+                        ? "bg-red-50 opacity-60"
+                        : "hover:bg-gray-50 cursor-pointer"
+                    }
+                  >
+                    {["date", "project", "hours", "description"].map((f) => (
+                      <td
+                        key={f}
+                        className="px-6 py-3"
+                        onClick={() => !r.deleted && setEditing({ ...r })}
+                      >
+                        {r[f] || "-"}
+
+                        {f === "description" && (
+                          <>
+                            {!r.deleted &&
+                              r.createdByRole === "admin" &&
+                              r.actionType === "created" && (
+                                <div className="mt-1 text-[11px] text-purple-600">
+                                  🛡 Creado por administrador
+                                </div>
+                              )}
+
+                            {!r.deleted &&
+                              r.modifiedByRole === "admin" &&
+                              r.actionType === "edited" && (
+                                <div className="mt-1 text-[11px] text-blue-600">
+                                  🛡 Editado por administrador
+                                </div>
+                              )}
+
+                            {r.deleted &&
+                              r.deletedByRole === "admin" && (
+                                <div className="mt-1 text-[11px] text-red-600">
+                                  🛡 Eliminado por administrador
+                                </div>
+                              )}
+
+                            {r.deleted &&
+                              r.deletedByRole === "user" && (
+                                <div className="mt-1 text-[11px] text-gray-600">
+                                  👤 Eliminado por vos
+                                </div>
+                              )}
+                          </>
+                        )}
+                      </td>
+                    ))}
+
+                    <td className="text-right px-4 py-3">
+                      {!r.deleted && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleting(r);
+                          }}
+                          className="text-trackly-danger hover:underline"
+                        >
+                          ❌
+                        </button>
+                      )}
+
+                      {r.deleted && !deletedByAdmin && (
+                        <button
+                          onClick={async () => {
+                            await updateHourRecord(r.id, {
+                              deleted: false,
+                              deletedBy: null,
+                              deletedByRole: null,
+                              deletedAt: null,
+                              actionType: "restored",
+                              modifiedBy: user.uid,
+                              modifiedByRole: "user",
+                              modifiedAt: serverTimestamp(),
+                            });
+                          }}
+                          className="text-green-600 text-xs hover:underline"
+                        >
+                          Restaurar
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="space-y-3">
+        <div className="trackly-card p-2">
           <MonthCalendarPicker
             selected={selectedDate}
             onSelect={setSelectedDate}
@@ -299,85 +407,205 @@ export default function MyRecords() {
             editable={false}
           />
         </div>
-      </div>
 
-      {/* ===== MODAL EDICIÓN ===== */}
-      {editing && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-6 space-y-4">
-            <h2 className="text-lg font-semibold">Editar registro</h2>
-
-            <MonthCalendarPicker
-              selected={editing.date}
-              onSelect={(date) =>
-                setEditing((prev) => ({ ...prev, date }))
-              }
-              holidays={holidays}
-              editable
-            />
-
-            <select
-              className="input w-full"
-              value={editing.project}
-              onChange={(e) =>
-                setEditing({ ...editing, project: e.target.value })
-              }
+        {settings?.featureReports && (
+          <div className="trackly-card p-4 space-y-3 text-sm">
+            <button
+              onClick={handleSendReport}
+              disabled={!canSendReport}
+              className="trackly-btn trackly-btn-primary w-full disabled:opacity-50"
             >
-              {projects.map((p) => (
-                <option key={p.id} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              Enviar informe mensual
+            </button>
 
-            <input
-              type="number"
-              step="0.25"
-              className="input w-full"
-              value={editing.hours}
-              onChange={(e) =>
-                setEditing({ ...editing, hours: e.target.value })
-              }
-            />
+            {currentMonthReport && (
+              <div className="text-xs space-y-1 text-trackly-muted">
+                <div>
+                  <strong>Estado:</strong>{" "}
+                  {currentMonthReport.status === "submitted" && (
+                    <span className="text-blue-600">
+                      Pendiente de revisión
+                    </span>
+                  )}
+                  {currentMonthReport.status === "approved" && (
+                    <span className="text-green-600">Aprobado</span>
+                  )}
+                  {currentMonthReport.status === "rejected" && (
+                    <span className="text-red-600">Rechazado</span>
+                  )}
+                </div>
 
-            <textarea
-              className="input w-full"
-              rows="3"
-              value={editing.description}
-              onChange={(e) =>
-                setEditing({ ...editing, description: e.target.value })
-              }
-            />
-
-            <div className="flex justify-between items-center pt-4">
-              <button
-                onClick={handleDelete}
-                disabled={saving}
-                className="text-sm text-red-600 hover:underline"
-              >
-                Eliminar registro
-              </button>
-
-              <div className="flex gap-2">
-                <button
-                  className="px-4 py-2 text-sm"
-                  onClick={() => setEditing(null)}
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  className="btn-primary px-4 py-2 text-sm"
-                  disabled={saving}
-                  onClick={handleSaveEdit}
-                >
-                  {saving ? "Guardando…" : "Guardar"}
-                </button>
+                {currentMonthReport.adminNote && (
+                  <div>
+                    <strong>Nota del administrador:</strong>{" "}
+                    {currentMonthReport.adminNote}
+                  </div>
+                )}
               </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+
+    {/* MODAL EDIT */}
+    {editing && (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+        <div className="trackly-card w-full max-w-2xl p-6 space-y-4">
+          <h2 className="trackly-h2 text-trackly-primary">
+            Editar registro
+          </h2>
+
+          <div className="flex gap-10 bg-blue-50 border border-blue-200 rounded p-4">
+            <div className="w-1/2">
+              <MonthCalendarPicker
+                selected={editing.date}
+                holidays={holidays}
+                editable
+                onSelect={(date) =>
+                  setEditing((prev) => ({ ...prev, date }))
+                }
+              />
+            </div>
+
+            <div className="w-1/2 space-y-3">
+              {settings?.featureProjectCombo && (
+                <>
+                  <label className="block text-sm font-medium">
+                    Proyecto
+                  </label>
+                  <select
+                    className="trackly-input w-full"
+                    value={editing.project}
+                    onChange={(e) =>
+                      setEditing((prev) => ({
+                        ...prev,
+                        project: e.target.value,
+                      }))
+                    }
+                  >
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+
+              {settings?.featureTaskCombo && (
+                    <TaskTypeSelector
+                      taskId={editing.taskId}
+                      taskTypeId={editing.taskTypeId}
+                      onChange={({ taskId, taskTypeId }) =>
+                        setEditing((prev) => ({
+                          ...prev,
+                          taskId,
+                          taskTypeId,
+                        }))
+                      }
+                    />
+                  )}
+
+              {settings?.featureJiraCombo && (
+                <>
+                  <label className="block text-sm font-medium">
+                    Tarea Jira (opcional)
+                  </label>
+                  <select
+                    value={editing.jiraIssue || ""}
+                    onChange={(e) =>
+                      setEditing((prev) => ({
+                        ...prev,
+                        jiraIssue: e.target.value,
+                      }))
+                    }
+                    className="trackly-input w-full"
+                  >
+                    <option value="">— Sin tarea Jira —</option>
+                    {!loadingJira &&
+                      jiraIssues.map((i) => (
+                        <option key={i.key} value={i.key}>
+                          {i.key} — {i.summary}
+                        </option>
+                      ))}
+                  </select>
+                </>
+              )}
+
+              <label className="block text-sm font-medium">Horas</label>
+              <input
+                type="number"
+                step="0.25"
+                className="trackly-input w-full"
+                value={editing.hours}
+                onChange={(e) =>
+                  setEditing((prev) => ({
+                    ...prev,
+                    hours: e.target.value,
+                  }))
+                }
+              />
+
+              <textarea
+                className="trackly-input w-full"
+                rows="3"
+                value={editing.description}
+                onChange={(e) =>
+                  setEditing((prev) => ({
+                    ...prev,
+                    description: e.target.value,
+                  }))
+                }
+              />
             </div>
           </div>
+
+          <div className="flex justify-end gap-2 pt-4">
+            <button
+              onClick={() => setEditing(null)}
+              className="trackly-btn trackly-btn-secondary"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSaveEdit}
+              disabled={saving}
+              className="trackly-btn trackly-btn-primary"
+            >
+              Guardar cambios
+            </button>
+          </div>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    )}
+
+    {/* MODAL DELETE */}
+    {deleting && (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+        <div className="trackly-card w-full max-w-md p-6 space-y-4">
+          <h2 className="trackly-h2 text-trackly-danger">
+            Eliminar registro
+          </h2>
+
+          <div className="flex justify-end gap-2 pt-4">
+            <button
+              onClick={() => setDeleting(null)}
+              className="trackly-btn trackly-btn-secondary"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={confirmDelete}
+              disabled={saving}
+              className="trackly-btn trackly-btn-danger"
+            >
+              Eliminar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
+);
 }

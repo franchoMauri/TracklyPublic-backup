@@ -2,8 +2,6 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { auth } from "../services/firebase";
 import {
   onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
   signOut,
   setPersistence,
   browserSessionPersistence,
@@ -11,9 +9,13 @@ import {
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db } from "../services/firebase";
 import { ensureUserDocument } from "../services/usersService";
+import { listenAdminSettings } from "../services/adminSettingsService";
 
 const AuthContext = createContext();
 
+/* ======================================================
+   PROVIDER
+====================================================== */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -23,6 +25,9 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
 
+  const [settings, setSettings] = useState(null);
+
+  /* ================= AUTH ================= */
   useEffect(() => {
     setPersistence(auth, browserSessionPersistence).catch(() => {});
 
@@ -31,7 +36,7 @@ export function AuthProvider({ children }) {
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       setAuthError("");
 
-      // ===== LOGOUT / NO USER =====
+      /* ===== LOGOUT ===== */
       if (!currentUser) {
         if (unsubscribeProfile) {
           unsubscribeProfile();
@@ -42,12 +47,12 @@ export function AuthProvider({ children }) {
         setProfile(null);
         setRole("user");
         setNeedsOnboarding(false);
-        setProfileLoaded(true); // 👈 clave: no bloquear la app
+        setProfileLoaded(true);
         setLoading(false);
         return;
       }
 
-      // ===== LOGIN =====
+      /* ===== LOGIN ===== */
       setLoading(true);
       setProfileLoaded(false);
 
@@ -56,9 +61,10 @@ export function AuthProvider({ children }) {
       const userRef = doc(db, "users", currentUser.uid);
       const snap = await getDoc(userRef);
 
+      // 🔒 Usuario deshabilitado
       if (snap.exists() && snap.data().disabled === true) {
         await signOut(auth);
-        setAuthError("Tu cuenta fue deshabilitada por un administrador");
+        setAuthError("Cuenta deshabilitada. Contactarse con el administrador");
         setUser(null);
         setProfile(null);
         setRole("user");
@@ -70,14 +76,9 @@ export function AuthProvider({ children }) {
 
       setUser(currentUser);
 
-      const usaGoogle = currentUser.providerData?.some(
-        (p) => p.providerId === "google.com"
-      );
-
-      // ===== PROFILE LISTENER =====
+      /* ===== PERFIL REALTIME ===== */
       unsubscribeProfile = onSnapshot(userRef, async (profileSnap) => {
         if (!profileSnap.exists()) {
-          // 👈 evita pantalla en blanco si el doc tarda
           setProfile(null);
           setRole("user");
           setNeedsOnboarding(true);
@@ -88,9 +89,10 @@ export function AuthProvider({ children }) {
 
         const data = profileSnap.data();
 
+        // 🔒 Deshabilitado en caliente
         if (data.disabled === true) {
           await signOut(auth);
-          setAuthError("Tu cuenta fue deshabilitada por un administrador");
+          setAuthError("Cuenta deshabilitada. Contactarse con el administrador");
           setUser(null);
           setProfile(null);
           setRole("user");
@@ -103,11 +105,10 @@ export function AuthProvider({ children }) {
         setProfile(data);
         setRole(data.role || "user");
 
-        const necesitaNombre = !data.name;
-        const necesitaCambioClave =
-          !usaGoogle && data.mustChangePassword === true;
+        const necesitaNombre =
+          typeof data.name !== "string" || data.name.trim() === "";
 
-        setNeedsOnboarding(necesitaNombre || necesitaCambioClave);
+        setNeedsOnboarding(necesitaNombre);
         setProfileLoaded(true);
         setLoading(false);
       });
@@ -119,15 +120,32 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
-  };
+  /* ================= ADMIN SETTINGS (REALTIME GLOBAL) ================= */
+  useEffect(() => {
+    const unsub = listenAdminSettings((data) => {
+      setSettings({
+        // defaults defensivos
+        featureManageHours: false,
+        featureProjectCombo: true,
+        featureTaskCombo: true,
+        featureJiraCombo: false,
+        featureWorkItems: false,
+        featureReports: false,
 
+        // override desde Firestore
+        ...data,
+      });
+    });
+
+    return () => unsub();
+  }, []);
+
+  /* ================= ACTIONS ================= */
   const logout = async () => {
     await signOut(auth);
   };
 
+  /* ================= PROVIDER ================= */
   return (
     <AuthContext.Provider
       value={{
@@ -137,9 +155,9 @@ export function AuthProvider({ children }) {
         needsOnboarding,
         profileLoaded,
         loading,
-        login,
-        logout,
+        settings,
         authError,
+        logout,
         clearAuthError: () => setAuthError(""),
       }}
     >
@@ -148,6 +166,9 @@ export function AuthProvider({ children }) {
   );
 }
 
+/* ======================================================
+   HOOK
+====================================================== */
 export function useAuth() {
   return useContext(AuthContext);
 }

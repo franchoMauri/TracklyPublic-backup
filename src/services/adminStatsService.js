@@ -7,10 +7,13 @@ import {
   where,
   onSnapshot,
 } from "firebase/firestore";
+import { getHolidays } from "./holidaysService";
+import { countBusinessDays } from "../utils/dateUtils";
 
 /**
  * Escucha en tiempo real las stats del mes por usuario
  * mes = "YYYY-MM"
+ * 👉 SOLO usuarios con horas en ese mes
  */
 export function escucharStatsUsuariosMes(mes, callback) {
   const usuariosRef = collection(db, "users");
@@ -22,8 +25,20 @@ export function escucharStatsUsuariosMes(mes, callback) {
   );
 
   let usuarios = [];
+  let holidays = [];
 
-  // escuchar usuarios
+  // =============================
+  // FERIADOS (una sola vez)
+  // =============================
+  const year = Number(mes.slice(0, 4));
+
+  getHolidays(year).then((days) => {
+    holidays = days;
+  });
+
+  // =============================
+  // USUARIOS
+  // =============================
   const unsubUsuarios = onSnapshot(usuariosRef, (usersSnap) => {
     usuarios = usersSnap.docs.map((doc) => ({
       uid: doc.id,
@@ -31,14 +46,16 @@ export function escucharStatsUsuariosMes(mes, callback) {
     }));
   });
 
-  // escuchar horas
+  // =============================
+  // HORAS (MES CORRIENTE)
+  // =============================
   const unsubHoras = onSnapshot(horasQuery, (hoursSnap) => {
     const porUsuario = {};
     const ahora = new Date();
 
     hoursSnap.forEach((doc) => {
       const h = doc.data();
-      if (!h.userId || !h.date) return;
+      if (!h.userId || !h.date || h.deleted) return;
 
       if (!porUsuario[h.userId]) {
         porUsuario[h.userId] = {
@@ -49,48 +66,54 @@ export function escucharStatsUsuariosMes(mes, callback) {
       }
 
       const horas = Number(h.hours || 0);
-      if (horas > 0) {
-        porUsuario[h.userId].totalHoras += horas;
-        porUsuario[h.userId].dias.add(h.date);
+      if (horas <= 0) return;
 
-        if (
-          !porUsuario[h.userId].ultimaFecha ||
-          h.date > porUsuario[h.userId].ultimaFecha
-        ) {
-          porUsuario[h.userId].ultimaFecha = h.date;
-        }
+      porUsuario[h.userId].totalHoras += horas;
+      porUsuario[h.userId].dias.add(h.date);
+
+      if (
+        !porUsuario[h.userId].ultimaFecha ||
+        h.date > porUsuario[h.userId].ultimaFecha
+      ) {
+        porUsuario[h.userId].ultimaFecha = h.date;
       }
     });
 
-    const resultado = usuarios.map((u) => {
-      const stats = porUsuario[u.uid];
-      let minutosDesdeUltimaCarga = null;
+    // =============================
+    // RESULTADO FINAL
+    // 👉 SOLO usuarios con horas en el mes
+    // =============================
+    const resultado = usuarios
+      .filter((u) => porUsuario[u.uid]?.totalHoras > 0)
+      .map((u) => {
+        const stats = porUsuario[u.uid];
 
-      if (stats?.ultimaFecha) {
-        const ultimaFecha = new Date(`${stats.ultimaFecha}T23:59:59`);
-        const diferencia = Math.floor(
-          (ahora - ultimaFecha) / (1000 * 60)
-        );
+        const inactiveBusinessDays = stats?.ultimaFecha
+          ? countBusinessDays(
+              stats.ultimaFecha,
+              ahora,
+              holidays
+            )
+          : 0;
 
-        minutosDesdeUltimaCarga = Math.max(0, diferencia);
-      }
-
-      return {
-        uid: u.uid,
-        name: u.name || null,
-        email: u.email || null,
-        disabled: u.disabled === true,
-        totalHours: stats?.totalHoras || 0,
-        daysCount: stats?.dias?.size || 0,
-        lastActivityDate: stats?.ultimaFecha || null,
-        minutosDesdeUltimaCarga,
-      };
-    });
+        return {
+          uid: u.uid,
+          name: u.name || null,
+          email: u.email || null,
+          disabled: u.disabled === true,
+          totalHours: stats.totalHoras,
+          daysCount: stats.dias.size,
+          lastActivityDate: stats.ultimaFecha,
+          inactiveBusinessDays,
+        };
+      });
 
     callback(resultado);
   });
 
-  // función de limpieza
+  // =============================
+  // CLEANUP
+  // =============================
   return () => {
     unsubUsuarios();
     unsubHoras();

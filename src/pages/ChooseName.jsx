@@ -1,26 +1,15 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { updateUserName } from "../services/usersService";
-import { updatePassword } from "firebase/auth";
-import { auth } from "../services/firebase";
-import { doc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../services/firebase";
-import { useNavigate } from "react-router-dom";
 
 export default function ChooseName() {
   const { user, profile } = useAuth();
 
   const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [saving, setSaving] = useState(false);
-
-  const navigate = useNavigate();
-
-  // detectar si el usuario usa Google
-  const usaGoogle = user?.providerData?.some(
-    (p) => p.providerId === "google.com"
-  );
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (profile?.name) {
@@ -30,42 +19,31 @@ export default function ChooseName() {
 
   const handleSave = async (e) => {
     e.preventDefault();
-
     if (!user) return;
 
     if (!name.trim()) {
-      alert("Ingresá un nombre válido");
+      setError("Ingresá un nombre válido");
       return;
-    }
-
-    // 🔐 Validación de contraseña SOLO si NO es Google
-    if (!usaGoogle) {
-      if (password.length < 6 || password !== confirm) {
-        alert("La contraseña debe tener al menos 6 caracteres y coincidir");
-        return;
-      }
     }
 
     try {
       setSaving(true);
+      setError("");
 
-      // 1️⃣ Cambiar contraseña SOLO si no es Google
-      if (!usaGoogle) {
-        await updatePassword(auth.currentUser, password);
-      }
-
-      // 2️⃣ Guardar nombre
+      // 1️⃣ Guardar nombre visible
       await updateUserName(user.uid, name.trim());
 
-      // 3️⃣ Liberar onboarding
+      // 2️⃣ Liberar onboarding
       await updateDoc(doc(db, "users", user.uid), {
         mustChangePassword: false,
+        updatedAt: serverTimestamp(),
       });
 
-      navigate("/dashboard", { replace: true });
+      // 🚫 NO navegar acá
+      // AuthContext + AppRouter detectan el cambio
     } catch (err) {
       console.error("Error onboarding", err);
-      alert("No se pudo completar el registro");
+      setError("No se pudo completar el registro");
       setSaving(false);
     }
   };
@@ -94,36 +72,20 @@ export default function ChooseName() {
           </div>
         </div>
 
+        {error && (
+          <div className="bg-red-100 text-red-700 text-xs p-2 rounded text-center">
+            {error}
+          </div>
+        )}
+
         <input
           className="input w-full"
           placeholder="Nombre visible en la app"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
+          disabled={saving}
         />
-
-        {/* 🔐 CONTRASEÑA SOLO PARA MAIL/CLAVE */}
-        {!usaGoogle && (
-          <>
-            <input
-              type="password"
-              className="input w-full"
-              placeholder="Nueva contraseña"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-
-            <input
-              type="password"
-              className="input w-full"
-              placeholder="Repetir contraseña"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              required
-            />
-          </>
-        )}
 
         <button
           type="submit"

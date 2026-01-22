@@ -2,21 +2,15 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { auth } from "../services/firebase";
 import { signInWithEmailAndPassword } from "firebase/auth";
-import { Navigate } from "react-router-dom";
 import tracklyLogo from "../assets/trackly-logo.png";
 
 export default function Login() {
-  const { user, login, authError, clearAuthError } = useAuth();
+  const { login, authError, clearAuthError } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loadingEmail, setLoadingEmail] = useState(false);
   const [error, setError] = useState("");
-
-  // 👉 REDIRECCIÓN AUTOMÁTICA SI YA ESTÁ LOGUEADO
-  if (user) {
-    return <Navigate to="/dashboard" replace />;
-  }
 
   useEffect(() => {
     if (authError) setError(authError);
@@ -31,13 +25,7 @@ export default function Login() {
       setLoadingEmail(true);
       await signInWithEmailAndPassword(auth, email, password);
     } catch (e) {
-      if (e.code === "auth/user-not-found") {
-        setError("El usuario no existe");
-      } else if (e.code === "auth/wrong-password") {
-        setError("Contraseña incorrecta");
-      } else {
-        setError("Error al iniciar sesión");
-      }
+      setError("Error al iniciar sesión");
     } finally {
       setLoadingEmail(false);
     }
@@ -79,12 +67,6 @@ export default function Login() {
             {loadingEmail ? "Ingresando…" : "Iniciar sesión"}
           </button>
         </form>
-
-        <div className="text-center text-xs text-gray-400">o</div>
-
-        <button onClick={login} className="btn-primary w-full">
-          Ingresar con Google
-        </button>
       </div>
     </div>
   );
