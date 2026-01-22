@@ -18,7 +18,9 @@ import { serverTimestamp } from "firebase/firestore";
 import { getTasks } from "../services/tasksService";
 import { getTaskTypes } from "../services/taskTypesService";
 import { listenAdminSettings } from "../services/adminSettingsService";
-import TaskTypeSelector from "../components/shared/TaskTypeSelector";
+import TaskTypeSelector from "../components/Shared/TaskTypeSelector";
+
+
 export default function AdminHoursPanel({ onClose }) {
   const { role, user } = useAuth();
 
