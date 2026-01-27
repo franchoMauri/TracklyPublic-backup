@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useAuth } from "../../context/AuthContext";
 import { useDroppable } from "@dnd-kit/core";
 import WorkItemCard from "./WorkItemCard";
 
@@ -10,16 +9,13 @@ export default function WorkItemColumn({
   onSelect,
   onPreview,
 }) {
-  const { role } = useAuth();
   const [hover, setHover] = useState(false);
-
-  const canCreate = role === "admin";
 
   /* =============================
      DND – DROPPABLE
   ============================= */
   const { setNodeRef, isOver } = useDroppable({
-    id: status, // 🔑 CLAVE: debe coincidir con item.status
+    id: status,
   });
 
   /* =============================
@@ -45,8 +41,11 @@ export default function WorkItemColumn({
       <div
         ref={setNodeRef}
         className={`
-          trackly-card p-3 flex flex-col max-h-[70vh]
-          transition
+          trackly-card
+          p-2 flex flex-col max-h-[70vh]
+          rounded
+          transition-colors duration-200
+          ${hover ? "bg-sky-50" : ""}
           ${isOver ? "ring-2 ring-trackly-primary" : ""}
         `}
       >
@@ -79,14 +78,14 @@ export default function WorkItemColumn({
         </div>
       </div>
 
-      {/* CREATE */}
-      {canCreate && hover && (
+      {/* CREATE — habilitado para TODOS */}
+      {hover && (
         <button
           type="button"
           onClick={handleCreate}
           className="
             text-xs py-1
-            rounded-md
+            rounded-sm
             border border-dashed border-trackly-border
             text-trackly-muted
             hover:text-trackly-primary

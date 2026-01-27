@@ -14,17 +14,82 @@ import { listenAdminSettings } from "../services/adminSettingsService";
 const AuthContext = createContext();
 
 /* ======================================================
+   MODE → FEATURES
+====================================================== */
+function resolveFeaturesByMode(mode) {
+  switch (mode) {
+    case "HOURS_ONLY":
+      return {
+        manageHours: true,
+        projects: false,
+        tasks: false,
+        workItems: false,
+        jira: false,
+
+        // ✅ FIX: informes activos en HOURS_ONLY
+        reports: true,
+
+        kanban: false,
+      };
+
+    case "PROJECTS":
+      return {
+        manageHours: false,
+        projects: true,
+        tasks: true,
+        workItems: true,
+        jira: false,
+        reports: false,
+        kanban: true,
+      };
+
+    case "FULL":
+      return {
+        manageHours: true,
+        projects: true,
+        tasks: true,
+        workItems: true,
+        jira: true,
+        reports: true,
+        kanban: true,
+      };
+
+    default:
+      return {
+        manageHours: false,
+        projects: false,
+        tasks: false,
+        workItems: false,
+        jira: false,
+        reports: false,
+        kanban: false,
+      };
+  }
+}
+
+/* ======================================================
    PROVIDER
 ====================================================== */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [role, setRole] = useState("user");
+
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
 
+  /**
+   * settings = {
+   *   mode: "HOURS_ONLY" | "PROJECTS" | "FULL",
+   *   features: { ...derivadas },
+   *   inactivityEnabled,
+   *   inactivityHours,
+   *   reminderEnabled,
+   *   reminderDays
+   * }
+   */
   const [settings, setSettings] = useState(null);
 
   /* ================= AUTH ================= */
@@ -120,20 +185,20 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  /* ================= ADMIN SETTINGS (REALTIME GLOBAL) ================= */
+  /* ================= ADMIN SETTINGS (GLOBAL / REALTIME) ================= */
   useEffect(() => {
     const unsub = listenAdminSettings((data) => {
-      setSettings({
-        // defaults defensivos
-        featureManageHours: false,
-        featureProjectCombo: true,
-        featureTaskCombo: true,
-        featureJiraCombo: false,
-        featureWorkItems: false,
-        featureReports: false,
+      const mode = data?.mode || "HOURS_ONLY";
 
-        // override desde Firestore
-        ...data,
+      setSettings({
+        mode,
+        features: resolveFeaturesByMode(mode),
+
+        inactivityEnabled: data?.inactivityEnabled ?? false,
+        inactivityHours: data?.inactivityHours ?? 24,
+
+        reminderEnabled: data?.reminderEnabled ?? false,
+        reminderDays: data?.reminderDays ?? 3,
       });
     });
 

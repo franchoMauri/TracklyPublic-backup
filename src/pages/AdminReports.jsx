@@ -24,9 +24,6 @@ export default function AdminReports({ onClose }) {
     type: "success",
   });
 
-  // =============================
-  // DERIVED DATA
-  // =============================
   const filteredReports = reports.filter(
     (r) => r.month === selectedMonth
   );
@@ -47,10 +44,25 @@ export default function AdminReports({ onClose }) {
   }, []);
 
   /* =============================
+     VALIDACIÓN NOTA OBLIGATORIA
+  ============================= */
+  const requireNote = () => {
+    if (!adminNote || !adminNote.trim()) {
+      setToast({
+        message: "La nota para el usuario es obligatoria",
+        type: "error",
+      });
+      return false;
+    }
+    return true;
+  };
+
+  /* =============================
      ACTIONS (PENDIENTE)
   ============================= */
   const handleAction = async (status) => {
     if (!selected) return;
+    if (!requireNote()) return;
 
     try {
       setSaving(true);
@@ -58,7 +70,7 @@ export default function AdminReports({ onClose }) {
       await updateReportStatus(
         selected.id,
         status,
-        adminNote || null
+        adminNote.trim()
       );
 
       setReports((prev) =>
@@ -67,7 +79,7 @@ export default function AdminReports({ onClose }) {
             ? {
                 ...r,
                 status,
-                adminNote: adminNote || null,
+                adminNote: adminNote.trim(),
                 reviewedAt: new Date(),
               }
             : r
@@ -98,23 +110,22 @@ export default function AdminReports({ onClose }) {
      GRID STATUS CLICK
   ============================= */
   const toggleReportStatus = (report) => {
-    // 🔴 Rechazado → iniciar aprobación con nota
-    if (report.status === "rejected") {
-      setSelected(report);
-      setAdminNote(report.adminNote || "");
-      setPendingApproval(report);
-      return;
-    }
-
-    // 🟢 Aprobado → Rechazado inmediato
-    if (report.status === "approved") {
-      changeStatus(report, "rejected", null);
-    }
+    setSelected(report);
+    setAdminNote(report.adminNote || "");
+    setPendingApproval(report);
   };
 
-  const changeStatus = async (report, status, note) => {
+  const changeStatus = async (report, status) => {
+    if (!requireNote()) return;
+
     try {
-      await updateReportStatus(report.id, status, note);
+      setSaving(true);
+
+      await updateReportStatus(
+        report.id,
+        status,
+        adminNote.trim()
+      );
 
       setReports((prev) =>
         prev.map((r) =>
@@ -122,7 +133,7 @@ export default function AdminReports({ onClose }) {
             ? {
                 ...r,
                 status,
-                adminNote: note,
+                adminNote: adminNote.trim(),
                 reviewedAt: new Date(),
               }
             : r
@@ -136,11 +147,17 @@ export default function AdminReports({ onClose }) {
             : "Informe rechazado",
         type: "success",
       });
+
+      setPendingApproval(null);
+      setSelected(null);
+      setAdminNote("");
     } catch {
       setToast({
         message: "Error al actualizar el informe",
         type: "error",
       });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -270,154 +287,31 @@ export default function AdminReports({ onClose }) {
               </div>
             ) : (
               <>
-                {/* DETALLE DE HORAS (SIEMPRE) */}
-                <div className="space-y-1">
-                  <h3 className="font-medium">
-                    {selected.userName} — {selected.month}
-                  </h3>
+                <textarea
+                  className="input w-full text-sm"
+                  rows={3}
+                  placeholder="Nota obligatoria para el usuario"
+                  value={adminNote}
+                  onChange={(e) => setAdminNote(e.target.value)}
+                />
 
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-gray-500">
-                      Total: {selected.totalHours} hs
-                    </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleAction("approved")}
+                    disabled={saving}
+                    className="px-4 py-2 rounded bg-green-600 text-white text-sm"
+                  >
+                    Aprobar
+                  </button>
 
-                    {(selected.status === "approved" ||
-                      selected.status === "rejected") && (
-                      <div className="px-4 py-1 text-sm rounded-md bg-gray-100 text-gray-700 font-medium">
-                        Informe revisado
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => handleAction("rejected")}
+                    disabled={saving}
+                    className="px-4 py-2 rounded bg-red-600 text-white text-sm"
+                  >
+                    Rechazar
+                  </button>
                 </div>
-
-
-
-                <div className="border rounded">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-3 py-2 text-left">
-                          Fecha
-                        </th>
-                        <th className="px-3 py-2 text-left">
-                          Horas
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(
-                        selected.breakdown || {}
-                      ).map(([date, h]) => (
-                        <tr key={date} className="border-t">
-                          <td className="px-3 py-2">
-                            {date}
-                          </td>
-                          <td className="px-3 py-2 relative group">
-                            {h}
-                            {selected.entriesByDate?.[date]?.length > 0 && (
-                              <div className="absolute z-20 hidden group-hover:block bg-gray-800 text-white text-xs rounded-md px-3 py-2 top-full left-0 mt-1 shadow-lg max-w-xs">
-                                <div className="font-medium mb-1">
-                                  Tareas del día
-                                </div>
-                                <ul className="space-y-1">
-                                  {selected.entriesByDate[date].map(
-                                    (e, i) => (
-                                      <li key={i}>
-                                        • {e.description}{" "}
-                                        <span className="text-gray-300">
-                                          ({e.hours}h)
-                                        </span>
-                                      </li>
-                                    )
-                                  )}
-                                </ul>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* ACCIONES PARA PENDIENTE */}
-                {selected.status === "submitted" && (
-                  <>
-                    <textarea
-                      className="input w-full text-sm"
-                      rows={3}
-                      placeholder="Nota para el usuario (opcional)"
-                      value={adminNote}
-                      onChange={(e) =>
-                        setAdminNote(e.target.value)
-                      }
-                    />
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() =>
-                          handleAction("approved")
-                        }
-                        disabled={saving}
-                        className="px-4 py-2 rounded bg-green-600 text-white text-sm"
-                      >
-                        Aprobar
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          handleAction("rejected")
-                        }
-                        disabled={saving}
-                        className="px-4 py-2 rounded bg-red-600 text-white text-sm"
-                      >
-                        Rechazar
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {/* BLOQUE DE APROBACIÓN DESDE RECHAZADO */}
-                {pendingApproval && (
-                  <div className="space-y-3 border-t pt-4">
-                    <textarea
-                      className="input w-full text-sm"
-                      rows={3}
-                      placeholder="Nota para el usuario (opcional)"
-                      value={adminNote}
-                      onChange={(e) =>
-                        setAdminNote(e.target.value)
-                      }
-                    />
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={async () => {
-                          await changeStatus(
-                            pendingApproval,
-                            "approved",
-                            adminNote || null
-                          );
-                          setPendingApproval(null);
-                          setAdminNote("");
-                        }}
-                        className="px-4 py-2 rounded bg-green-600 text-white text-sm"
-                      >
-                        Guardar nota
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setPendingApproval(null);
-                          setAdminNote("");
-                        }}
-                        className="px-4 py-2 rounded bg-gray-200 text-gray-700 text-sm"
-                      >
-                        Cerrar
-                      </button>
-                    </div>
-                  </div>
-                )}
               </>
             )}
           </div>

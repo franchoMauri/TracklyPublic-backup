@@ -22,11 +22,17 @@ export default function WorkItemPreview({ item, onClose }) {
   const descRef = useRef(null);
 
   const [data, setData] = useState(item);
-  const [showAssign, setShowAssign] = useState(false);
+
+  const [titleValue, setTitleValue] = useState(item.title);
+  const [editingTitle, setEditingTitle] = useState(false);
+
   const [editingDesc, setEditingDesc] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
 
   const [estimate, setEstimate] = useState("");
   const [actual, setActual] = useState("");
+
+  const [showAssign, setShowAssign] = useState(false);
 
   const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState("");
@@ -51,14 +57,11 @@ export default function WorkItemPreview({ item, onClose }) {
      LOAD PROJECTS
   ============================= */
   useEffect(() => {
-    const unsub = onSnapshot(
-      collection(db, "projects"),
-      (snap) => {
-        setProjects(
-          snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-        );
-      }
-    );
+    const unsub = onSnapshot(collection(db, "projects"), (snap) => {
+      setProjects(
+        snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      );
+    });
     return () => unsub();
   }, []);
 
@@ -72,6 +75,7 @@ export default function WorkItemPreview({ item, onClose }) {
         if (!snap.exists()) return;
         const d = snap.data();
         setData({ id: item.id, ...d });
+        setTitleValue(d.title);
         setEstimate(d.estimateHours ?? "");
         setActual(d.actualHours ?? "");
       }
@@ -114,23 +118,21 @@ export default function WorkItemPreview({ item, onClose }) {
   }, [onClose]);
 
   /* =============================
-     TEXT COMMANDS
+     SAVE ALL
   ============================= */
-  const exec = (cmd) => {
-    document.execCommand(cmd);
-    descRef.current?.focus();
-  };
+  const saveAll = async () => {
+    if (!isAdmin || !hasChanges) return;
 
-  /* =============================
-     SAVE DESCRIPTION
-  ============================= */
-  const saveDescription = async () => {
-    if (!isAdmin) return;
     await updateDoc(doc(db, "workItems", item.id), {
-      description: descRef.current.innerHTML,
+      title: titleValue.trim() || data.title,
+      description:
+        descRef.current?.innerHTML ?? data.description,
       updatedAt: serverTimestamp(),
     });
+
+    setEditingTitle(false);
     setEditingDesc(false);
+    setHasChanges(false);
   };
 
   /* =============================
@@ -149,11 +151,16 @@ export default function WorkItemPreview({ item, onClose }) {
      SAVE HOURS
   ============================= */
   const saveHours = async (field, value) => {
-    if (!isAdmin) return;
-    await updateDoc(doc(db, "workItems", item.id), {
-      [field]: value === "" ? null : Number(value),
-    });
-  };
+  const canEdit =
+    isAdmin || data.assignedTo === user.uid;
+
+  if (!canEdit) return;
+
+  await updateDoc(doc(db, "workItems", item.id), {
+    [field]: value === "" ? null : Number(value),
+  });
+};
+
 
   /* =============================
      ADD COMMENT
@@ -198,10 +205,32 @@ export default function WorkItemPreview({ item, onClose }) {
         "
       >
         {/* HEADER */}
-        <div className="flex justify-between items-start px-4 py-3 border-b shrink-0">
-          <h3 className="text-sm font-semibold truncate pr-4">
-            {data.title}
-          </h3>
+        <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
+          {editingTitle && isAdmin ? (
+            <input
+              autoFocus
+              value={titleValue}
+              onChange={(e) => {
+                setTitleValue(e.target.value);
+                setHasChanges(true);
+              }}
+              onBlur={() => setEditingTitle(false)}
+              className="
+                flex-1 text-sm font-semibold
+                outline-none border-b border-trackly-border
+              "
+            />
+          ) : (
+            <h3
+              className="text-sm font-semibold truncate flex-1 cursor-text"
+              onClick={() =>
+                isAdmin && setEditingTitle(true)
+              }
+            >
+              {titleValue}
+            </h3>
+          )}
+
           <button
             onClick={onClose}
             className="text-trackly-muted hover:text-trackly-primary"
@@ -214,22 +243,14 @@ export default function WorkItemPreview({ item, onClose }) {
         <div className="flex flex-1 overflow-hidden">
           {/* LEFT */}
           <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col min-w-0">
-            {editingDesc && isAdmin && (
-              <div className="flex gap-2 mb-2 text-xs">
-                <button onClick={() => exec("bold")}>B</button>
-                <button onClick={() => exec("italic")}>I</button>
-                <button onClick={() => exec("underline")}>U</button>
-              </div>
-            )}
-
             <div
               ref={descRef}
               contentEditable={isAdmin}
               suppressContentEditableWarning
               onFocus={() => setEditingDesc(true)}
-              onBlur={saveDescription}
+              onInput={() => setHasChanges(true)}
               className="
-                flex-1 overflow-y-auto overflow-x-hidden
+                flex-1 overflow-y-auto
                 pr-2 text-sm text-trackly-muted
                 whitespace-pre-wrap break-words
                 outline-none cursor-text
@@ -287,7 +308,6 @@ export default function WorkItemPreview({ item, onClose }) {
               <div className="text-trackly-muted mb-1">
                 Proyecto
               </div>
-
               {isAdmin ? (
                 <select
                   value={data.projectId || ""}
@@ -315,7 +335,6 @@ export default function WorkItemPreview({ item, onClose }) {
               <div className="text-trackly-muted mb-1">
                 Usuario asignado
               </div>
-
               {isAdmin ? (
                 <>
                   <button
@@ -351,45 +370,45 @@ export default function WorkItemPreview({ item, onClose }) {
               <div className="text-trackly-muted mb-1">
                 Tiempo estimado
               </div>
-              {isAdmin ? (
+              {isAdmin || data.assignedTo === user.uid ? (
                 <input
                   type="number"
                   step="0.5"
                   value={estimate}
-                  onChange={(e) =>
-                    setEstimate(e.target.value)
-                  }
+                  onChange={(e) => setEstimate(e.target.value)}
                   onBlur={() =>
                     saveHours("estimateHours", estimate)
                   }
                   className="trackly-input w-full text-xs"
                 />
               ) : (
-                `${data.estimateHours ?? "—"}`
+                <div className="font-medium">
+                  {data.estimateHours ?? "—"}
+                </div>
               )}
             </div>
+
 
             {/* ACTUAL + PROGRESS */}
             <div>
               <div className="text-trackly-muted mb-1">
                 Tiempo real
               </div>
-
-              {isAdmin ? (
+              {isAdmin || data.assignedTo === user.uid ? (
                 <input
                   type="number"
                   step="0.5"
                   value={actual}
-                  onChange={(e) =>
-                    setActual(e.target.value)
-                  }
+                  onChange={(e) => setActual(e.target.value)}
                   onBlur={() =>
                     saveHours("actualHours", actual)
                   }
                   className="trackly-input w-full text-xs"
                 />
               ) : (
-                `${data.actualHours ?? "—"}`
+                <div className="font-medium">
+                  {data.actualHours ?? "—"}
+                </div>
               )}
 
               {data.estimateHours != null &&
@@ -398,21 +417,31 @@ export default function WorkItemPreview({ item, onClose }) {
                     <div className="h-2 w-full bg-trackly-border rounded overflow-hidden">
                       <div
                         className={`h-full ${
-                          isOver
+                          data.actualHours > data.estimateHours
                             ? "bg-red-500"
                             : "bg-trackly-primary"
                         }`}
                         style={{
-                          width: `${progressPercent}%`,
+                          width: `${Math.min(
+                            (data.actualHours / data.estimateHours) *
+                              100,
+                            100
+                          )}%`,
                         }}
                       />
                     </div>
                     <div className="text-[10px] text-trackly-muted mt-1 text-right">
-                      {Math.round(progress * 100)}%
+                      {Math.round(
+                        (data.actualHours /
+                          data.estimateHours) *
+                          100
+                      )}
+                      %
                     </div>
                   </div>
                 )}
             </div>
+
 
             {/* CREATED */}
             <div>
@@ -428,6 +457,36 @@ export default function WorkItemPreview({ item, onClose }) {
             </div>
           </div>
         </div>
+
+        {/* FOOTER ACTIONS */}
+        {isAdmin && (
+          <div className="flex justify-end gap-2 px-4 py-3 border-t shrink-0">
+            <button
+              onClick={saveAll}
+              disabled={!hasChanges}
+              className="
+                text-xs px-3 py-1 rounded
+                border border-trackly-border
+                text-trackly-muted
+                hover:text-trackly-primary
+                disabled:opacity-50 disabled:cursor-not-allowed
+              "
+            >
+              Guardar
+            </button>
+
+            <button
+              onClick={onClose}
+              className="
+                text-xs px-3 py-1 rounded
+                bg-trackly-primary text-white
+                hover:opacity-90
+              "
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

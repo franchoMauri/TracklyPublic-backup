@@ -2,7 +2,14 @@ import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "../../context/AuthContext";
 import MonthCalendarPicker from "../layout/ui/MonthCalendarPicker";
 import { listenHolidays } from "../../services/holidaysService";
-import {  collection,  query,  where,  onSnapshot,  doc,  getDoc,} from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  doc,
+  getDoc,
+} from "firebase/firestore";
 import { db } from "../../services/firebase";
 import { getAdminSettings } from "../../services/adminSettingsService";
 import { escucharStatsUsuariosMes } from "../../services/adminStatsService";
@@ -203,21 +210,40 @@ export default function HoursDashboard() {
 ============================= */
 
 function MonthlySummaryCard({ month, metrics }) {
-  const monthLabel = new Date(`${month}-01`).toLocaleDateString("es-AR", {
+  const [collapsed, setCollapsed] = useState(false);
+
+  // ✅ LABEL DINÁMICO SEGÚN MES SELECCIONADO (LOCAL, SIN UTC)
+  const [year, monthIndex] = month.split("-").map(Number);
+  const monthDate = new Date(year, monthIndex - 1, 1);
+
+  const monthLabel = monthDate.toLocaleDateString("es-AR", {
     month: "long",
     year: "numeric",
   });
 
   return (
-    <div className="trackly-card p-8 space-y-8">
-      <h2 className="trackly-h2 capitalize">{monthLabel}</h2>
+    <div className="trackly-card p-6 space-y-4">
+      {/* HEADER */}
+      <div className="flex items-center justify-between">
+        <h2 className="trackly-h2 capitalize">{monthLabel}</h2>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-        <Metric label="Total cargado" value={`${metrics.total} hs`} />
-        <Metric label="Promedio diario" value={`${metrics.avg} hs`} />
-        <Metric label="Días trabajados" value={metrics.daysWorked} />
-        <Metric label="Máx. en un día" value={`${metrics.maxDayHours} hs`} />
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          className="text-sm text-blue-600 hover:text-blue-800 transition"
+        >
+          {collapsed ? "▾" : "▴"}
+        </button>
       </div>
+
+      {/* BODY */}
+      {!collapsed && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 pt-4">
+          <Metric label="Total cargado" value={`${metrics.total} hs`} />
+          <Metric label="Promedio diario" value={`${metrics.avg} hs`} />
+          <Metric label="Días trabajados" value={metrics.daysWorked} />
+          <Metric label="Máx. en un día" value={`${metrics.maxDayHours} hs`} />
+        </div>
+      )}
     </div>
   );
 }

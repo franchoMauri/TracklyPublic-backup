@@ -11,7 +11,7 @@ import { db } from "../../services/firebase";
 import { useWorkItemStatuses } from "../../hooks/useWorkItemStatuses";
 import { useAuth } from "../../context/AuthContext";
 
-export default function WorkItemModal({ item, onClose }) {
+export default function WorkItemModal({ item, onClose, onSaved }) {
   const { user } = useAuth();
   const isNew = !!item.__isNew;
 
@@ -54,7 +54,11 @@ export default function WorkItemModal({ item, onClose }) {
     setForm({
       title: item.title || "",
       description: item.description || "",
-      status: item.status || statuses[0]?.key || "",
+      status:
+        item.status ||
+        statuses.find((s) => s.key === "todo")?.key ||
+        statuses[0]?.key ||
+        "",
       priority: item.priority || "medium",
       projectId: item.projectId || "",
       projectName: item.projectName || "",
@@ -94,19 +98,42 @@ export default function WorkItemModal({ item, onClose }) {
         updatedAt: serverTimestamp(),
       };
 
+      let savedItem = null;
+
       if (isNew) {
         // 🆕 CREATE
-        await addDoc(collection(db, "workItems"), {
+        const ref = await addDoc(collection(db, "workItems"), {
           ...payload,
           active: true,
           createdAt: serverTimestamp(),
           createdBy: user.uid,
           createdByName: user.displayName || user.email,
         });
+
+        savedItem = {
+          id: ref.id,
+          title: payload.title,
+          projectId: payload.projectId,
+          projectName: payload.projectName,
+          status: payload.status,
+          priority: payload.priority,
+        };
       } else {
         // ✏️ UPDATE
         await updateDoc(doc(db, "workItems", item.id), payload);
+
+        savedItem = {
+          id: item.id,
+          title: payload.title,
+          projectId: payload.projectId,
+          projectName: payload.projectName,
+          status: payload.status,
+          priority: payload.priority,
+        };
       }
+
+      // 🔁 callback opcional (AddHours, etc)
+      onSaved?.(savedItem);
 
       onClose();
     } finally {

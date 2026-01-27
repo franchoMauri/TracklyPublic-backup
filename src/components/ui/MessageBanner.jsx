@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 export default function MessageBanner({
   type = "info",
   children,
-  duration = 4000,
+  duration = 8000,
   onClose,
 }) {
   const [visible, setVisible] = useState(true);

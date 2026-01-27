@@ -1,7 +1,12 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useDraggable } from "@dnd-kit/core";
-import { deleteDoc, doc } from "firebase/firestore";
+import {
+  deleteDoc,
+  doc,
+  updateDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { db } from "../../services/firebase";
 import { useAuth } from "../../context/AuthContext";
 
@@ -17,9 +22,18 @@ export default function WorkItemCard({
 
   const [showAssign, setShowAssign] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleValue, setTitleValue] = useState(item.title);
 
   const avatarRef = useRef(null);
   const confirmRef = useRef(null);
+
+  /* =============================
+     SYNC TITLE
+  ============================= */
+  useEffect(() => {
+    setTitleValue(item.title);
+  }, [item.title]);
 
   /* =============================
      DND
@@ -32,6 +46,7 @@ export default function WorkItemCard({
     isDragging,
   } = useDraggable({
     id: item.id,
+    disabled: editingTitle,
   });
 
   const style = transform
@@ -39,10 +54,31 @@ export default function WorkItemCard({
     : undefined;
 
   /* =============================
-     DELETE
+     SAVE TITLE
+  ============================= */
+  const saveTitle = async () => {
+    const trimmed = titleValue.trim();
+
+    if (!trimmed) {
+      setTitleValue(item.title);
+      setEditingTitle(false);
+      return;
+    }
+
+    await updateDoc(doc(db, "workItems", item.id), {
+      title: trimmed,
+      updatedAt: serverTimestamp(),
+    });
+
+    setEditingTitle(false);
+  };
+
+  /* =============================
+     DELETE (solo admin)
   ============================= */
   const handleDelete = async (e) => {
     e.stopPropagation();
+    if (!isAdmin) return;
     await deleteDoc(doc(db, "workItems", item.id));
   };
 
@@ -50,7 +86,7 @@ export default function WorkItemCard({
      PREVIEW
   ============================= */
   const openPreview = () => {
-    if (!isDragging) {
+    if (!isDragging && !editingTitle) {
       onPreview?.(item);
     }
   };
@@ -61,33 +97,61 @@ export default function WorkItemCard({
         ref={setNodeRef}
         style={style}
         {...attributes}
+        {...listeners}
         className="
           group relative
           border border-trackly-border bg-white p-3
           hover:shadow-sm transition
           overflow-hidden
+          cursor-grab
         "
       >
         {/* HEADER */}
         <div className="flex justify-between items-start mb-1">
-          {/* TITLE (DRAG HANDLE) */}
-          <div
-            {...listeners}
-            className="
-              flex items-center gap-2
-              text-sm font-medium cursor-grab
-              min-w-0
-            "
-          >
-            <span className="truncate">{item.title}</span>
+          {/* TITLE */}
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {editingTitle ? (
+              <input
+                autoFocus
+                value={titleValue}
+                onChange={(e) =>
+                  setTitleValue(e.target.value)
+                }
+                onBlur={saveTitle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    saveTitle();
+                  }
+                  if (e.key === "Escape") {
+                    setTitleValue(item.title);
+                    setEditingTitle(false);
+                  }
+                }}
+                className="
+                  w-full bg-transparent text-sm font-medium
+                  outline-none border-b border-trackly-border
+                "
+              />
+            ) : (
+              <span
+                className="truncate cursor-text text-sm font-medium"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingTitle(true);
+                }}
+              >
+                {item.title}
+              </span>
+            )}
 
-            {/* ✏️ EDIT */}
-            {isAdmin && (
+            {/* ✏️ EDIT (modal) */}
+            {onEdit && (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onEdit?.(item);
+                  onEdit(item);
                 }}
                 className="
                   opacity-0 group-hover:opacity-100
@@ -102,7 +166,7 @@ export default function WorkItemCard({
             )}
           </div>
 
-          {/* 🗑️ DELETE */}
+          {/* 🗑️ DELETE (solo admin) */}
           {isAdmin && (
             <div className="relative">
               <button
@@ -137,7 +201,9 @@ export default function WorkItemCard({
                     Sí
                   </button>
                   <button
-                    onClick={() => setConfirmDelete(false)}
+                    onClick={() =>
+                      setConfirmDelete(false)
+                    }
                     className="text-trackly-muted hover:underline"
                   >
                     No
@@ -153,14 +219,10 @@ export default function WorkItemCard({
           <div className="mb-1">
             <span
               className="
-                inline-block
-                text-[10px]
-                px-2 py-0.5
-                rounded-full
-                bg-trackly-bg
-                text-trackly-muted
-                truncate
-                max-w-full
+                inline-block text-[10px]
+                px-2 py-0.5 rounded-full
+                bg-trackly-bg text-trackly-muted
+                truncate max-w-full
               "
               title={item.projectName}
             >

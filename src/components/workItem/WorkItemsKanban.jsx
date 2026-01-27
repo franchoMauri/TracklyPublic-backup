@@ -89,8 +89,10 @@ export default function WorkItemsKanban({ items, statuses }) {
 
     /* ✅ PERSISTENCIA */
     try {
-      await updateDoc(doc(db, "workItems", itemId), {
+      await updateDoc(doc(db, "workItems", id), {
         status: newStatus,
+        assignedTo: user.uid,
+        assignedToName: user.displayName || user.email,
         updatedAt: serverTimestamp(),
       });
     } catch (e) {
@@ -111,7 +113,7 @@ export default function WorkItemsKanban({ items, statuses }) {
       >
         {/* ================= KANBAN BOARD ================= */}
         <div className="overflow-x-auto pb-4">
-          <div className="flex gap-4 min-w-max">
+          <div className="flex gap-1 min-w-max">
             {statuses.map((status) => (
               <div key={status.key} className="w-[300px] shrink-0">
                 <WorkItemColumn

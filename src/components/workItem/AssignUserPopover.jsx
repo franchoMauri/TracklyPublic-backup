@@ -1,14 +1,20 @@
 import { useEffect, useState, useRef } from "react";
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, updateDoc } from "firebase/firestore";
 import { db } from "../../services/firebase";
 import { useUsers } from "../../hooks/useUsers";
+import { useAuth } from "../../context/AuthContext";
 
 export default function AssignUserPopover({
   item,
   onClose,
   anchorRef,
 }) {
-  const users = useUsers();
+  const { user, role } = useAuth();
+  const isAdmin = role === "admin";
+
+  // 🔑 SOLO ADMIN puede cargar usuarios
+  const users = isAdmin ? useUsers() : [];
+
   const [pos, setPos] = useState(null);
   const [query, setQuery] = useState("");
   const popoverRef = useRef(null);
@@ -50,22 +56,40 @@ export default function AssignUserPopover({
       );
   }, [pos, onClose]);
 
+  /* =============================
+     ASSIGN
+  ============================= */
   const assign = async (u) => {
     await updateDoc(doc(db, "workItems", item.id), {
       assignedTo: u.id,
       assignedToName: u.name || u.email,
-      updatedAt: serverTimestamp(),
+    });
+    onClose();
+  };
+
+  /* =============================
+     AUTO-ASSIGN (USER)
+  ============================= */
+  const assignToMe = async () => {
+    await updateDoc(doc(db, "workItems", item.id), {
+      assignedTo: user.uid,
+      assignedToName: user.displayName || user.email,
     });
     onClose();
   };
 
   if (!pos) return null;
 
-  const filteredUsers = users.filter((u) =>
-    (u.name || u.email || "")
-      .toLowerCase()
-      .includes(query.toLowerCase())
-  );
+  /* =============================
+     ADMIN: FILTRAR USERS
+  ============================= */
+  const filteredUsers = isAdmin
+    ? users.filter((u) =>
+        (u.name || u.email || "")
+          .toLowerCase()
+          .includes(query.toLowerCase())
+      )
+    : [];
 
   const getInitials = (user) => {
     if (user.name) {
@@ -105,70 +129,104 @@ export default function AssignUserPopover({
         Asignar a
       </div>
 
-      {/* SEARCH */}
-      <div className="px-2 py-2 border-b">
-        <input
-          type="text"
-          placeholder="Buscar usuario..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+      {/* =============================
+          USER → SOLO AUTOASIGNAR
+      ============================= */}
+      {!isAdmin && (
+        <button
+          type="button"
+          onClick={assignToMe}
           className="
-            w-full px-2 py-1
-            border border-trackly-border
-            rounded-sm text-xs
-            focus:outline-none
+            w-full px-3 py-3
+            text-left
+            hover:bg-trackly-bg
+            flex items-center gap-2
           "
-        />
-      </div>
-
-      {/* USERS */}
-      <div className="max-h-56 overflow-y-auto">
-        {filteredUsers.length === 0 ? (
-          <div className="px-3 py-2 text-trackly-muted">
-            Sin resultados
+        >
+          <div className="
+            w-7 h-7 rounded-full
+            bg-trackly-bg
+            flex items-center justify-center
+            text-[11px] font-medium
+            text-trackly-muted
+          ">
+            {getInitials(user)}
           </div>
-        ) : (
-          filteredUsers.map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              onClick={() => assign(u)}
+          <span>Asignarme a mí</span>
+        </button>
+      )}
+
+      {/* =============================
+          ADMIN → LISTA DE USUARIOS
+      ============================= */}
+      {isAdmin && (
+        <>
+          {/* SEARCH */}
+          <div className="px-2 py-2 border-b">
+            <input
+              type="text"
+              placeholder="Buscar usuario..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
               className="
-                w-full px-3 py-2
-                flex items-center gap-2
-                text-left
-                hover:bg-trackly-bg
+                w-full px-2 py-1
+                border border-trackly-border
+                rounded-sm text-xs
+                focus:outline-none
               "
-            >
-              {/* AVATAR */}
-              {u.photoURL || u.avatar ? (
-                <img
-                  src={u.photoURL || u.avatar}
-                  alt={u.name || u.email}
-                  className="w-7 h-7 rounded-full object-cover"
-                />
-              ) : (
-                <div
+            />
+          </div>
+
+          {/* USERS */}
+          <div className="max-h-56 overflow-y-auto">
+            {filteredUsers.length === 0 ? (
+              <div className="px-3 py-2 text-trackly-muted">
+                Sin resultados
+              </div>
+            ) : (
+              filteredUsers.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => assign(u)}
                   className="
-                    w-7 h-7 rounded-full
-                    bg-trackly-bg
-                    flex items-center justify-center
-                    text-[11px] font-medium
-                    text-trackly-muted
+                    w-full px-3 py-2
+                    flex items-center gap-2
+                    text-left
+                    hover:bg-trackly-bg
                   "
                 >
-                  {getInitials(u)}
-                </div>
-              )}
+                  {/* AVATAR */}
+                  {u.photoURL || u.avatar ? (
+                    <img
+                      src={u.photoURL || u.avatar}
+                      alt={u.name || u.email}
+                      className="w-7 h-7 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div
+                      className="
+                        w-7 h-7 rounded-full
+                        bg-trackly-bg
+                        flex items-center justify-center
+                        text-[11px] font-medium
+                        text-trackly-muted
+                      "
+                    >
+                      {getInitials(u)}
+                    </div>
+                  )}
 
-              {/* NAME */}
-              <span className="truncate">
-                {u.name || u.email}
-              </span>
-            </button>
-          ))
-        )}
-      </div>
+                  {/* NAME */}
+                  <span className="truncate">
+                    {u.name || u.email}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
 
       {/* FOOTER */}
       <button

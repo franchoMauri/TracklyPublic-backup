@@ -98,7 +98,6 @@ export default function KanbanDashboard() {
   ============================= */
   return (
     <div className="space-y-6">
-      <h2 className="trackly-h2">Work Items</h2>
 
       {/* ================= FILTERS ================= */}
       <div className="trackly-card p-4 flex flex-wrap gap-4 items-end">

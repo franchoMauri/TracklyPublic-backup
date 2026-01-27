@@ -9,6 +9,7 @@ import {
   orderBy,
   where,
   onSnapshot,
+  addDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { getHoursByMonth } from "./hoursService";
@@ -21,8 +22,21 @@ export async function submitMonthlyReport(user, month) {
     throw new Error("Datos inválidos para generar el informe");
   }
 
-  const reportId = `${user.name}_${month.replace("-", "_")}`;
-  const reportRef = doc(db, "reports", reportId);
+  // 🔒 Regla: no puede existir un informe ACTIVO (submitted / approved)
+  const activeQuery = query(
+    collection(db, "reports"),
+    where("userId", "==", user.uid),
+    where("month", "==", month),
+    where("status", "in", ["submitted", "approved"])
+  );
+
+  const activeSnap = await getDocs(activeQuery);
+
+  if (!activeSnap.empty) {
+    throw new Error(
+      "Ya existe un informe pendiente o aprobado para este mes"
+    );
+  }
 
   const records = await getHoursByMonth(user.uid, month);
 
@@ -60,9 +74,10 @@ export async function submitMonthlyReport(user, month) {
     reviewedAt: null,
   };
 
-  await setDoc(reportRef, payload);
+  // ✅ Siempre crear un documento nuevo
+  const ref = await addDoc(collection(db, "reports"), payload);
 
-  return reportId;
+  return ref.id;
 }
 
 // ======================================================
@@ -169,7 +184,7 @@ export function listenAdminReports(callback) {
 export async function updateReportStatus(
   reportId,
   status,
-  adminNote = null
+  adminNote
 ) {
   if (!reportId || !status) {
     throw new Error("Parámetros inválidos");
@@ -179,11 +194,15 @@ export async function updateReportStatus(
     throw new Error("Estado inválido");
   }
 
+  if (!adminNote || !adminNote.trim()) {
+    throw new Error("La nota del administrador es obligatoria");
+  }
+
   const ref = doc(db, "reports", reportId);
 
   await updateDoc(ref, {
     status,
-    adminNote,
+    adminNote: adminNote.trim(),
     reviewedAt: serverTimestamp(),
   });
 }
